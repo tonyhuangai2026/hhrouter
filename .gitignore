@@ -1,0 +1,26 @@
+# ---- Secrets / local config (NEVER commit) ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+*.tar.gz
+
+# ---- Build artifacts ----
+server/server
+server/out/
+dist/
+web/dist/
+
+# ---- Dependencies ----
+node_modules/
+
+# ---- Tooling / local state ----
+.chorus/
+.DS_Store
+*.log
+
+# ---- Go ----
+*.test
+*.out

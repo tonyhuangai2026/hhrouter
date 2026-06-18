@@ -1,0 +1,49 @@
+{
+  "title": "如何使用该 API Key",
+  "subtitle": "为常见客户端提供可直接复制粘贴的配置。请求按模型名经本网关路由。",
+  "back": "返回 Key 列表",
+  "copyBaseUrl": "复制 Base URL",
+  "baseUrlLabel": "Base URL",
+  "context": {
+    "name": "名称",
+    "group": "分组",
+    "key": "Key"
+  },
+  "keyNotice": "请使用你创建该 Key 时复制的那串完整 Key。出于安全考虑，完整 Key 仅在创建时展示一次、之后无法再次获取——下面示例中用占位符 `sk-YOUR_API_KEY` 代替，请替换为你的真实 Key。",
+  "modelNote": "下方模型仅为示例。请使用你的渠道实际提供的模型——可用 `GET {{apiBase}}/models` 列出可用模型。",
+  "routingNote": "该 Key 属于分组 **{{group}}**，因此会路由到为该分组配置的渠道。",
+  "notFound": {
+    "title": "未找到该 Key",
+    "desc": "该 API Key 不存在，或你没有访问权限。",
+    "back": "返回 Key 列表"
+  },
+  "tabs": {
+    "claudeCode": "Claude Code",
+    "codex": "Codex",
+    "litellm": "litellm",
+    "openai": "openai (Python)",
+    "curl": "curl"
+  },
+  "copy": {
+    "button": "复制",
+    "copied": "已复制到剪贴板",
+    "failed": "无法自动复制，请手动选择并复制。"
+  },
+  "clients": {
+    "claudeCode": {
+      "body": "Claude Code 走 Anthropic Messages API。将它指向本网关、用你的 Key 作为鉴权令牌，然后启动 `claude`：\n\n```bash\nexport ANTHROPIC_BASE_URL={{baseUrl}}\nexport ANTHROPIC_AUTH_TOKEN=sk-YOUR_API_KEY\n# 可选：指定 Claude Code 使用的模型\nexport ANTHROPIC_MODEL={{model}}\nclaude\n```\n\n网关同时接受 Claude Code 发送的凭据（`x-api-key` 与 `Authorization: Bearer` 都支持）。请求落到 `{{apiBase}}/messages`，并按模型名路由。"
+    },
+    "codex": {
+      "body": "Codex CLI 兼容 OpenAI。最快的方式是用环境变量：\n\n```bash\nexport OPENAI_BASE_URL={{apiBase}}\nexport OPENAI_API_KEY=sk-YOUR_API_KEY\ncodex --model {{model}}\n```\n\n或在 `~/.codex/config.toml` 中定义自定义 provider：\n\n```toml\nmodel = \"{{model}}\"\nmodel_provider = \"agent-router\"\n\n[model_providers.agent-router]\nname = \"Agent Router\"\nbase_url = \"{{apiBase}}\"\nenv_key = \"OPENAI_API_KEY\"\n```\n\n不同 Codex 版本的配置字段略有差异——若字段名不一致，请查看 `codex --help`。"
+    },
+    "litellm": {
+      "body": "加上 `openai/` 前缀，让 litellm 通过 OpenAI 兼容端点调用本网关：\n\n```python\nimport litellm\n\nresp = litellm.completion(\n    model=\"openai/{{model}}\",\n    api_base=\"{{apiBase}}\",\n    api_key=\"sk-YOUR_API_KEY\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(resp.choices[0].message.content)\n```"
+    },
+    "openai": {
+      "body": "将官方 OpenAI Python SDK 指向网关的 base URL：\n\n```python\nfrom openai import OpenAI\n\nclient = OpenAI(base_url=\"{{apiBase}}\", api_key=\"sk-YOUR_API_KEY\")\nresp = client.chat.completions.create(\n    model=\"{{model}}\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(resp.choices[0].message.content)\n```\n\n也支持流式：传入 `stream=True` 并迭代返回的分块。"
+    },
+    "curl": {
+      "body": "网关同时提供 OpenAI 兼容端点与 Anthropic Messages 端点。\n\n**OpenAI 兼容**（`Authorization: Bearer`）：\n\n```bash\ncurl {{apiBase}}/chat/completions \\\n  -H \"Authorization: Bearer sk-YOUR_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{model}}\",\n    \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n  }'\n```\n\n**Anthropic Messages**（`x-api-key` + `anthropic-version`）：\n\n```bash\ncurl {{apiBase}}/messages \\\n  -H \"x-api-key: sk-YOUR_API_KEY\" \\\n  -H \"anthropic-version: 2023-06-01\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{model}}\",\n    \"max_tokens\": 1024,\n    \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n  }'\n```"
+    }
+  }
+}

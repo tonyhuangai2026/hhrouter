@@ -1,0 +1,34 @@
+{
+  "title": "Create account",
+  "subtitle": "Agent Router Platform",
+  "firstAccountNotice": "The first account becomes the administrator.",
+  "fields": {
+    "username": {
+      "label": "Username",
+      "placeholder": "Choose a username"
+    },
+    "password": {
+      "label": "Password",
+      "placeholder": "Choose a password"
+    },
+    "confirmPassword": {
+      "label": "Confirm password",
+      "placeholder": "Re-enter password"
+    }
+  },
+  "validation": {
+    "usernameRequired": "Username is required",
+    "passwordRequired": "Password is required",
+    "confirmRequired": "Please confirm your password",
+    "passwordMismatch": "Passwords do not match"
+  },
+  "submit": "Register",
+  "switch": {
+    "prompt": "Already have an account? ",
+    "link": "Sign in"
+  },
+  "messages": {
+    "success": "Registered",
+    "failed": "Registration failed."
+  }
+}

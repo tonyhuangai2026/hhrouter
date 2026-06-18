@@ -1,0 +1,15 @@
+{
+  "documentTitle": "Setup - Agent Router Platform",
+  "checkingStatus": "Checking system status...",
+  "welcomeTitle": "Welcome to Agent Router Platform",
+  "firstDeploy": {
+    "guidance": "No accounts exist yet. Create the first account to get started.",
+    "adminNotice": "The first account becomes the administrator.",
+    "createButton": "Create first account"
+  },
+  "error": {
+    "description": "Could not reach the backend to determine setup status.",
+    "goLogin": "Go to login",
+    "register": "Register"
+  }
+}

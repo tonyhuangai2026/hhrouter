@@ -1,0 +1,17 @@
+{
+  "generic": "请求失败",
+  "network": "网络错误，请检查网络连接",
+  "timeout": "请求超时，请重试",
+  "badRequest": "请求无效",
+  "invalidCredentials": "用户名或密码错误",
+  "unauthorized": "未登录或登录已失效，请重新登录",
+  "sessionExpired": "登录已过期，请重新登录",
+  "forbidden": "没有权限执行此操作",
+  "notFound": "请求的资源不存在",
+  "conflict": "操作与当前状态冲突",
+  "validation": "校验失败，请检查输入",
+  "rateLimited": "请求过于频繁，请稍后再试",
+  "quotaExceeded": "配额已用尽",
+  "serverError": "服务器错误，请稍后再试",
+  "serviceUnavailable": "服务暂时不可用，请稍后再试"
+}

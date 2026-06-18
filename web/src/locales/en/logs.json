@@ -1,0 +1,58 @@
+{
+  "title": "Request logs",
+  "subtitle": "Detailed per-request log. Administrators see all users; regular users see their own.",
+  "actions": {
+    "refresh": "Refresh",
+    "resetFilters": "Reset filters"
+  },
+  "range": {
+    "today": "Today",
+    "7d": "7 days",
+    "30d": "30 days",
+    "custom": "Custom"
+  },
+  "filters": {
+    "channel": "Channel",
+    "model": "Model",
+    "status": "Status",
+    "user": "User",
+    "noModels": "No models yet"
+  },
+  "status": {
+    "all": "All statuses",
+    "success": "Success",
+    "error": "Error"
+  },
+  "scope": {
+    "ownUsage": "Showing your own request logs. Administrators can view all users and filter by user."
+  },
+  "type": {
+    "label": "Type:",
+    "all": "All",
+    "production": "Production",
+    "test": "Test"
+  },
+  "columns": {
+    "time": "Time",
+    "user": "User",
+    "model": "Model",
+    "channel": "Channel",
+    "format": "Format",
+    "upstream": "Upstream",
+    "tokens": "Tokens (P/C/T)",
+    "latency": "Latency",
+    "ttftLabel": "first token",
+    "latencyTooltipStream": "TTFT {{ttft}} ms · total {{total}} ms",
+    "latencyTooltipTotal": "total {{total}} ms",
+    "cost": "Cost",
+    "costTooltip": "in {{prompt}} · out {{completion}} · cache r {{cacheRead}} · w {{cacheWrite}}",
+    "status": "Status"
+  },
+  "statusUnknown": "unknown",
+  "empty": {
+    "noData": "No logs for the selected filters"
+  },
+  "errors": {
+    "loadLogs": "Failed to load logs"
+  }
+}

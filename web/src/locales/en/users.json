@@ -1,0 +1,138 @@
+{
+  "title": "Users",
+  "adminRequired": "Admin access required.",
+  "columns": {
+    "username": "Username",
+    "displayName": "Display name",
+    "email": "Email",
+    "role": "Role",
+    "status": "Status",
+    "group": "Group",
+    "quota": "Quota",
+    "lastLogin": "Last login",
+    "createdAt": "Created at"
+  },
+  "role": {
+    "admin": "Admin",
+    "user": "User"
+  },
+  "quota": {
+    "unlimited": "Unlimited"
+  },
+  "display": {
+    "never": "Never",
+    "none": "-"
+  },
+  "toolbar": {
+    "searchPlaceholder": "Search username or email",
+    "roleFilter": "All roles",
+    "statusFilter": "All statuses",
+    "sortField": "Sort by",
+    "sortOrder": "Order"
+  },
+  "sort": {
+    "createdAt": "Created at",
+    "usedQuota": "Used quota",
+    "username": "Username",
+    "asc": "Ascending",
+    "desc": "Descending"
+  },
+  "actions": {
+    "new": "New user",
+    "edit": "Edit",
+    "resetPassword": "Reset password",
+    "quota": "Quota",
+    "enable": "Enable",
+    "disable": "Disable",
+    "delete": "Delete",
+    "view": "Detail"
+  },
+  "create": {
+    "title": "New user",
+    "usernameLabel": "Username",
+    "usernameRequired": "Username is required",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "Leave blank to auto-generate",
+    "passwordHint": "If left blank, a temporary password will be generated and shown once.",
+    "displayNameLabel": "Display name",
+    "emailLabel": "Email",
+    "emailInvalid": "Please enter a valid email",
+    "roleLabel": "Role",
+    "statusLabel": "Status",
+    "quotaLabel": "Quota (tokens, -1 = unlimited)",
+    "groupLabel": "Group",
+    "groupPlaceholder": "default"
+  },
+  "edit": {
+    "title": "Edit user",
+    "titleWithName": "Edit user: {{name}}",
+    "roleLabel": "Role",
+    "statusLabel": "Status",
+    "quotaLabel": "Quota (tokens, -1 = unlimited)",
+    "groupLabel": "Group",
+    "groupPlaceholder": "default",
+    "displayNameLabel": "Display name",
+    "emailLabel": "Email",
+    "emailInvalid": "Please enter a valid email",
+    "selfRoleHint": "You cannot change your own role.",
+    "selfStatusHint": "You cannot disable your own account."
+  },
+  "resetPassword": {
+    "title": "Reset password",
+    "titleWithName": "Reset password: {{name}}",
+    "passwordLabel": "New password",
+    "passwordPlaceholder": "Leave blank to auto-generate",
+    "passwordHint": "Leave blank to generate a strong temporary password.",
+    "confirm": "Reset",
+    "resultTitle": "Temporary password",
+    "resultWarning": "Copy this password now. It is shown only once and cannot be retrieved later.",
+    "noPassword": "Password was reset, but no plaintext was returned."
+  },
+  "quotaOp": {
+    "title": "Adjust quota",
+    "titleWithName": "Adjust quota: {{name}}",
+    "currentLabel": "Current quota",
+    "opLabel": "Operation",
+    "add": "Add",
+    "set": "Set",
+    "resetUsed": "Reset used",
+    "amountLabel": "Amount",
+    "amountRequired": "Please enter an amount",
+    "addHint": "Increase the total quota by this amount.",
+    "setHint": "Set the total quota to this value (-1 = unlimited).",
+    "resetUsedHint": "Reset used quota to 0. No amount needed.",
+    "confirm": "Apply"
+  },
+  "detail": {
+    "title": "User detail",
+    "titleWithName": "User: {{name}}",
+    "profileSection": "Profile",
+    "usageSection": "Usage",
+    "tokensSection": "Tokens",
+    "totalRequests": "Requests",
+    "totalTokens": "Tokens",
+    "successRate": "Success rate",
+    "noTokens": "This user has no tokens.",
+    "tokenName": "Name",
+    "tokenStatus": "Status",
+    "tokenGroup": "Group",
+    "tokenQuota": "Quota",
+    "loadFailed": "Failed to load user detail"
+  },
+  "confirm": {
+    "deleteTitle": "Delete user",
+    "deleteContent": "Delete user \"{{name}}\"? This also deletes all of the user's API tokens. This cannot be undone."
+  },
+  "toast": {
+    "created": "User created",
+    "updated": "User updated",
+    "updateFailed": "Update failed",
+    "deleted": "User deleted",
+    "enabled": "User enabled",
+    "disabled": "User disabled",
+    "passwordReset": "Password reset",
+    "quotaUpdated": "Quota updated",
+    "copied": "Copied to clipboard",
+    "copyManual": "Copy failed — please copy manually"
+  }
+}

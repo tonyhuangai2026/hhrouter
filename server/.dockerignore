@@ -1,0 +1,7 @@
+# Keep the build context small and reproducible.
+server
+*.test
+.git
+.env
+.env.*
+!.env.example

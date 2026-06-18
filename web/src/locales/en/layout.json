@@ -1,0 +1,35 @@
+{
+  "appName": "Agent Router",
+  "systemName": "Agent Router Platform",
+  "nav": {
+    "dashboard": "Dashboard",
+    "channels": "Channels",
+    "rules": "Routing Rules",
+    "tokens": "Tokens",
+    "logs": "Logs",
+    "playground": "Playground",
+    "pricing": "Pricing",
+    "users": "Users",
+    "profile": "Profile"
+  },
+  "userMenu": {
+    "profile": "Profile",
+    "logout": "Logout"
+  },
+  "theme": {
+    "toLight": "Switch to light mode",
+    "toDark": "Switch to dark mode"
+  },
+  "language": {
+    "label": "Language",
+    "zh": "中文",
+    "en": "English"
+  },
+  "user": {
+    "fallbackName": "User"
+  },
+  "placeholder": {
+    "title": "Coming soon",
+    "description": "This page will be implemented in an upcoming task."
+  }
+}

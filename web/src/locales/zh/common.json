@@ -1,0 +1,64 @@
+{
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "confirm": "确定",
+    "ok": "确定",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "新建",
+    "add": "添加",
+    "update": "更新",
+    "submit": "提交",
+    "search": "搜索",
+    "reset": "重置",
+    "refresh": "刷新",
+    "close": "关闭",
+    "back": "返回",
+    "copy": "复制",
+    "test": "测试",
+    "view": "查看",
+    "more": "更多"
+  },
+  "labels": {
+    "actions": "操作",
+    "status": "状态",
+    "name": "名称",
+    "type": "类型",
+    "createdAt": "创建时间",
+    "updatedAt": "更新时间",
+    "all": "全部",
+    "yes": "是",
+    "no": "否",
+    "unlimited": "不限",
+    "optional": "可选",
+    "required": "必填"
+  },
+  "status": {
+    "enabled": "启用",
+    "disabled": "禁用",
+    "active": "已启用",
+    "inactive": "已禁用",
+    "success": "成功",
+    "failed": "失败",
+    "pending": "处理中"
+  },
+  "state": {
+    "loading": "加载中...",
+    "noData": "暂无数据",
+    "empty": "暂无内容"
+  },
+  "messages": {
+    "success": "操作成功",
+    "failed": "操作失败",
+    "saved": "保存成功",
+    "created": "创建成功",
+    "updated": "更新成功",
+    "deleted": "删除成功",
+    "copied": "已复制到剪贴板",
+    "copyFailed": "复制失败",
+    "confirmDelete": "确定要删除该项吗？",
+    "confirmDeleteTitle": "确认删除",
+    "operationFailed": "操作失败，请重试"
+  }
+}

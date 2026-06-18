@@ -1,0 +1,71 @@
+{
+  "title": "Playground",
+  "subtitle": "管理员直连指定渠道与模型进行对话测试（不扣配额、不经路由）。",
+  "config": {
+    "title": "设置",
+    "channel": "渠道",
+    "channelPlaceholder": "选择渠道",
+    "model": "模型",
+    "modelPlaceholder": "选择模型",
+    "modelManualPlaceholder": "手动输入模型名",
+    "modelManual": "手动输入模型",
+    "noModelsHint": "该渠道暂无模型，请先在「渠道」页执行「获取模型」，或在下方手动输入模型名。",
+    "stream": "流式输出",
+    "maxTokens": "最大 Token",
+    "temperature": "温度",
+    "advanced": "高级参数",
+    "system": "系统提示词（可选）",
+    "systemPlaceholder": "可选：设定系统提示词，将在发送时置于历史最前。"
+  },
+  "chat": {
+    "title": "对话"
+  },
+  "roles": {
+    "user": "用户",
+    "assistant": "助手",
+    "system": "系统"
+  },
+  "input": {
+    "placeholder": "输入消息，回车发送，Shift+回车换行。可粘贴图片或填写图片 URL。",
+    "imageUrlPlaceholder": "粘贴图片 URL（http 或 data:）",
+    "addImageUrl": "添加图片 URL",
+    "uploadImage": "上传图片",
+    "attachments": "附件",
+    "removeImage": "移除图片",
+    "imageUrlInvalid": "图片 URL 无效，需以 http(s):// 或 data: 开头。"
+  },
+  "actions": {
+    "send": "发送",
+    "stop": "停止",
+    "clear": "清空会话",
+    "newChat": "新对话",
+    "copy": "复制",
+    "regenerate": "重新生成"
+  },
+  "usage": {
+    "title": "用量",
+    "promptTokens": "输入 Token",
+    "completionTokens": "输出 Token",
+    "totalTokens": "总计 Token"
+  },
+  "status": {
+    "streaming": "生成中…",
+    "empty": "选择渠道与模型后，开始对话。",
+    "emptyTitle": "开始一段对话",
+    "noOutput": "本轮无输出"
+  },
+  "errors": {
+    "noChannel": "请先选择渠道。",
+    "noModel": "请选择或输入模型名。",
+    "emptyMessage": "请输入消息内容或附加图片。",
+    "sendFailed": "发送失败",
+    "imageReadFailed": "图片读取失败。",
+    "imageTooLarge": "图片过大，请使用小于 {{max}} 的图片。"
+  },
+  "toast": {
+    "cleared": "会话已清空",
+    "stopped": "已停止生成",
+    "copied": "已复制到剪贴板",
+    "copyFailed": "复制失败"
+  }
+}

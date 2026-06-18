@@ -1,0 +1,138 @@
+{
+  "title": "用户",
+  "adminRequired": "需要管理员权限。",
+  "columns": {
+    "username": "用户名",
+    "displayName": "显示名称",
+    "email": "邮箱",
+    "role": "角色",
+    "status": "状态",
+    "group": "分组",
+    "quota": "额度",
+    "lastLogin": "最近登录",
+    "createdAt": "创建时间"
+  },
+  "role": {
+    "admin": "管理员",
+    "user": "用户"
+  },
+  "quota": {
+    "unlimited": "不限"
+  },
+  "display": {
+    "never": "从未",
+    "none": "-"
+  },
+  "toolbar": {
+    "searchPlaceholder": "搜索用户名或邮箱",
+    "roleFilter": "全部角色",
+    "statusFilter": "全部状态",
+    "sortField": "排序字段",
+    "sortOrder": "排序方向"
+  },
+  "sort": {
+    "createdAt": "创建时间",
+    "usedQuota": "已用额度",
+    "username": "用户名",
+    "asc": "升序",
+    "desc": "降序"
+  },
+  "actions": {
+    "new": "新建用户",
+    "edit": "编辑",
+    "resetPassword": "重置密码",
+    "quota": "额度",
+    "enable": "启用",
+    "disable": "停用",
+    "delete": "删除",
+    "view": "详情"
+  },
+  "create": {
+    "title": "新建用户",
+    "usernameLabel": "用户名",
+    "usernameRequired": "请输入用户名",
+    "passwordLabel": "密码",
+    "passwordPlaceholder": "留空将自动生成",
+    "passwordHint": "如果留空，将生成临时密码并仅显示一次。",
+    "displayNameLabel": "显示名称",
+    "emailLabel": "邮箱",
+    "emailInvalid": "请输入有效的邮箱",
+    "roleLabel": "角色",
+    "statusLabel": "状态",
+    "quotaLabel": "额度（令牌数，-1 = 不限）",
+    "groupLabel": "分组",
+    "groupPlaceholder": "default"
+  },
+  "edit": {
+    "title": "编辑用户",
+    "titleWithName": "编辑用户：{{name}}",
+    "roleLabel": "角色",
+    "statusLabel": "状态",
+    "quotaLabel": "额度（令牌数，-1 = 不限）",
+    "groupLabel": "分组",
+    "groupPlaceholder": "default",
+    "displayNameLabel": "显示名称",
+    "emailLabel": "邮箱",
+    "emailInvalid": "请输入有效的邮箱",
+    "selfRoleHint": "无法修改自己的角色。",
+    "selfStatusHint": "无法禁用自己的账户。"
+  },
+  "resetPassword": {
+    "title": "重置密码",
+    "titleWithName": "重置密码：{{name}}",
+    "passwordLabel": "新密码",
+    "passwordPlaceholder": "留空将自动生成",
+    "passwordHint": "留空将生成强随机临时密码。",
+    "confirm": "重置",
+    "resultTitle": "临时密码",
+    "resultWarning": "请立即复制该密码。它仅显示一次，之后无法再次获取。",
+    "noPassword": "密码已重置，但未返回明文。"
+  },
+  "quotaOp": {
+    "title": "调整额度",
+    "titleWithName": "调整额度：{{name}}",
+    "currentLabel": "当前额度",
+    "opLabel": "操作",
+    "add": "增加",
+    "set": "设置",
+    "resetUsed": "清零已用",
+    "amountLabel": "数量",
+    "amountRequired": "请输入数量",
+    "addHint": "在总额度上增加该数量。",
+    "setHint": "将总额度设为该值（-1 = 不限）。",
+    "resetUsedHint": "将已用额度清零，无需填写数量。",
+    "confirm": "应用"
+  },
+  "detail": {
+    "title": "用户详情",
+    "titleWithName": "用户：{{name}}",
+    "profileSection": "资料",
+    "usageSection": "用量",
+    "tokensSection": "令牌",
+    "totalRequests": "请求数",
+    "totalTokens": "令牌数",
+    "successRate": "成功率",
+    "noTokens": "该用户暂无令牌。",
+    "tokenName": "名称",
+    "tokenStatus": "状态",
+    "tokenGroup": "分组",
+    "tokenQuota": "额度",
+    "loadFailed": "加载用户详情失败"
+  },
+  "confirm": {
+    "deleteTitle": "删除用户",
+    "deleteContent": "确定删除用户“{{name}}”？此操作将同时删除该用户的全部 API 令牌，且无法撤销。"
+  },
+  "toast": {
+    "created": "用户创建成功",
+    "updated": "用户更新成功",
+    "updateFailed": "更新失败",
+    "deleted": "用户删除成功",
+    "enabled": "用户已启用",
+    "disabled": "用户已停用",
+    "passwordReset": "密码已重置",
+    "quotaUpdated": "额度已更新",
+    "copied": "已复制到剪贴板",
+    "copyManual": "复制失败，请手动复制"
+  }
+}

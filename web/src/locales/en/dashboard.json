@@ -1,0 +1,65 @@
+{
+  "title": "Dashboard",
+  "actions": {
+    "refresh": "Refresh",
+    "resetFilters": "Reset filters"
+  },
+  "range": {
+    "today": "Today",
+    "7d": "7 days",
+    "30d": "30 days",
+    "custom": "Custom"
+  },
+  "filters": {
+    "channel": "Channel",
+    "model": "Model",
+    "status": "Status",
+    "user": "User",
+    "noModels": "No models yet"
+  },
+  "status": {
+    "all": "All statuses",
+    "success": "Success",
+    "error": "Error"
+  },
+  "scope": {
+    "ownUsage": "Showing your own usage. Administrators can view all users and filter by user."
+  },
+  "stats": {
+    "totalRequests": "Total requests",
+    "successRate": "Success rate",
+    "totalTokens": "Total tokens",
+    "tokenSplit": "prompt {{prompt}} · completion {{completion}}",
+    "avgLatency": "Avg latency",
+    "totalCost": "Total cost"
+  },
+  "group": {
+    "label": "Group charts:",
+    "byChannel": "By channel",
+    "byModel": "By model"
+  },
+  "charts": {
+    "timeseriesTitle": "Requests & token usage over time",
+    "shareByChannel": "Share by channel (tokens)",
+    "shareByModel": "Share by model (tokens)",
+    "axis": {
+      "requests": "Requests",
+      "tokens": "Tokens"
+    },
+    "legend": {
+      "requests": "{{name}} req",
+      "tokens": "{{name}} tokens"
+    },
+    "pie": {
+      "channelShare": "Channel share",
+      "modelShare": "Model share"
+    }
+  },
+  "empty": {
+    "noData": "No data for the selected range"
+  },
+  "errors": {
+    "loadSummary": "Failed to load summary",
+    "loadTimeseries": "Failed to load timeseries"
+  }
+}

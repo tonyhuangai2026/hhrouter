@@ -1,0 +1,61 @@
+{
+  "title": "路由规则",
+  "actions": {
+    "newRule": "新建规则",
+    "editRule": "编辑规则",
+    "createRule": "新建规则"
+  },
+  "columns": {
+    "priority": "优先级",
+    "name": "名称",
+    "match": "匹配条件",
+    "targetChannels": "目标渠道",
+    "enabled": "启用"
+  },
+  "form": {
+    "name": "名称",
+    "nameRequired": "名称为必填项",
+    "priority": "优先级（数值越小越先匹配）",
+    "enabled": "启用",
+    "matchSectionTitle": "匹配条件（留空表示不限制）",
+    "groups": "密钥分组",
+    "groupsPlaceholder": "例如 vip",
+    "models": "模型（支持 * 通配符）",
+    "modelsPlaceholder": "例如 gpt-4o, claude-*",
+    "minTokens": "最小 tokens",
+    "maxTokens": "最大 tokens",
+    "targetSectionTitle": "目标",
+    "targetChannels": "目标渠道",
+    "targetChannelsPlaceholder": "选择已有渠道",
+    "targetGroup": "或目标分组（渠道的可选替代项）",
+    "targetGroupPlaceholder": "渠道分组标签"
+  },
+  "match": {
+    "any": "任意（无约束）",
+    "groups": "分组：{{value}}",
+    "models": "模型：{{value}}",
+    "min": "最小：{{value}}",
+    "max": "最大：{{value}}"
+  },
+  "target": {
+    "none": "无",
+    "group": "分组：{{value}}"
+  },
+  "validation": {
+    "targetRequired": "请至少选择一个目标渠道或填写一个目标分组。"
+  },
+  "popconfirm": {
+    "deleteTitle": "删除该规则？"
+  },
+  "toast": {
+    "loadChannelsFailed": "加载渠道失败",
+    "created": "规则已创建",
+    "updated": "规则已更新",
+    "deleted": "规则已删除",
+    "enabled": "规则已启用",
+    "disabled": "规则已禁用",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败",
+    "updateFailed": "更新失败"
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "title": "Channels",
+  "actions": {
+    "new": "New channel",
+    "fetchModels": "Fetch models",
+    "test": "Test"
+  },
+  "columns": {
+    "name": "Name",
+    "type": "Type",
+    "group": "Group",
+    "models": "Models",
+    "priority": "Priority",
+    "weight": "Weight",
+    "status": "Status",
+    "actions": "Actions"
+  },
+  "type": {
+    "openai": "OpenAI",
+    "bedrock": "Bedrock",
+    "anthropic": "Anthropic"
+  },
+  "status": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "auto_disabled": "Auto-disabled"
+  },
+  "models": {
+    "none": "none",
+    "more": "+{{count}}"
+  },
+  "modal": {
+    "createTitle": "New channel",
+    "editTitle": "Edit channel"
+  },
+  "form": {
+    "name": "Name",
+    "nameRequired": "Name is required",
+    "type": "Type",
+    "baseUrl": "Base URL",
+    "baseUrlPlaceholder": "https://api.openai.com",
+    "baseUrlRequired": "Base URL is required for OpenAI channels",
+    "region": "Region",
+    "regionPlaceholder": "us-east-1",
+    "regionRequired": "Region is required for Bedrock channels",
+    "key": "API key",
+    "keyEdit": "API key (leave blank to keep current)",
+    "keyPlaceholderOpenai": "Upstream sk-...",
+    "keyPlaceholderBedrock": "Bedrock bearer API key",
+    "models": "Models",
+    "modelsPlaceholder": "Type a model id and press Enter",
+    "modelMapping": "Model mapping",
+    "modelMappingPlaceholder": "Map requested model id to upstream model id",
+    "modelMappingExternal": "External model name",
+    "modelMappingUpstream": "Upstream model id",
+    "modelMappingAdd": "Add mapping",
+    "modelMappingRemove": "Remove",
+    "modelMappingServedNote": "A mapped external name is automatically routable — you don't need to also add it to Models above. The external name is what clients call; the upstream id is what gets sent to this channel.",
+    "modelMappingEmpty": "No mappings. Clients call models from the Models list as-is.",
+    "modelMappingCopyHint": "Click a model name to copy it:",
+    "useInferenceProfile": "Use inference profile",
+    "useInferenceProfileHelp": "When on, bare Bedrock model IDs are auto-prefixed by the channel region (us./eu./apac.) to use a cross-region inference profile; already-prefixed or mapped IDs are left unchanged.",
+    "suggestions": "Suggestions:",
+    "group": "Group",
+    "groupPlaceholder": "default",
+    "priority": "Priority",
+    "weight": "Weight",
+    "status": "Status"
+  },
+  "toast": {
+    "created": "Channel created",
+    "updated": "Channel updated",
+    "deleted": "Channel deleted",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed",
+    "fetchModelsSuccess": "Fetched {{count}} model(s) for {{name}}",
+    "fetchModelsFailed": "Fetch models failed",
+    "testPassed": "Test passed for {{name}}",
+    "testPassedDetail": "Test passed for {{name}}: {{detail}}",
+    "testFailed": "Test failed for {{name}}",
+    "testFailedDetail": "Test failed for {{name}}: {{detail}}",
+    "testError": "Channel test failed",
+    "copied": "Copied: {{value}}",
+    "copyManual": "Could not copy automatically — select and copy manually."
+  },
+  "confirm": {
+    "delete": "Delete this channel?"
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "title": "数据分析",
+  "actions": {
+    "refresh": "刷新",
+    "resetFilters": "重置筛选"
+  },
+  "range": {
+    "today": "今天",
+    "7d": "近 7 天",
+    "30d": "近 30 天",
+    "custom": "自定义"
+  },
+  "filters": {
+    "channel": "渠道",
+    "model": "模型",
+    "status": "状态",
+    "user": "用户",
+    "noModels": "暂无模型"
+  },
+  "status": {
+    "all": "全部状态",
+    "success": "成功",
+    "error": "失败"
+  },
+  "scope": {
+    "ownUsage": "仅显示您自己的用量。管理员可查看全部用户并按用户筛选。"
+  },
+  "stats": {
+    "totalRequests": "总请求数",
+    "successRate": "成功率",
+    "totalTokens": "总 Token 数",
+    "tokenSplit": "prompt {{prompt}} · completion {{completion}}",
+    "avgLatency": "平均延迟",
+    "totalCost": "总花费"
+  },
+  "group": {
+    "label": "图表分组：",
+    "byChannel": "按渠道",
+    "byModel": "按模型"
+  },
+  "charts": {
+    "timeseriesTitle": "请求与 Token 用量趋势",
+    "shareByChannel": "渠道占比（Token）",
+    "shareByModel": "模型占比（Token）",
+    "axis": {
+      "requests": "请求数",
+      "tokens": "Token"
+    },
+    "legend": {
+      "requests": "{{name}} 请求",
+      "tokens": "{{name}} Token"
+    },
+    "pie": {
+      "channelShare": "渠道占比",
+      "modelShare": "模型占比"
+    }
+  },
+  "empty": {
+    "noData": "所选时间范围内暂无数据"
+  },
+  "errors": {
+    "loadSummary": "加载统计数据失败",
+    "loadTimeseries": "加载趋势数据失败"
+  }
+}

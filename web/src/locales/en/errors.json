@@ -1,0 +1,17 @@
+{
+  "generic": "Request failed",
+  "network": "Network error, please check your connection",
+  "timeout": "Request timed out, please try again",
+  "badRequest": "Invalid request",
+  "invalidCredentials": "Invalid username or password",
+  "unauthorized": "Not authenticated, please sign in again",
+  "sessionExpired": "Your session has expired, please sign in again",
+  "forbidden": "You do not have permission to perform this action",
+  "notFound": "The requested resource was not found",
+  "conflict": "The operation conflicts with the current state",
+  "validation": "Validation failed, please check your input",
+  "rateLimited": "Too many requests, please slow down",
+  "quotaExceeded": "Quota exceeded",
+  "serverError": "Server error, please try again later",
+  "serviceUnavailable": "Service temporarily unavailable, please try again later"
+}

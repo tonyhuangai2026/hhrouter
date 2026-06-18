@@ -1,0 +1,36 @@
+{
+  "title": "模型价格",
+  "subtitle": "按渠道、按模型配置价格（美元 / 每百万 token）。只有配置了输入和输出价格的模型才能被请求。",
+  "filters": {
+    "channel": "渠道",
+    "channelPlaceholder": "选择一个渠道"
+  },
+  "columns": {
+    "model": "模型",
+    "input": "输入 / 1M",
+    "output": "输出 / 1M",
+    "cacheRead": "缓存读 / 1M",
+    "cacheWrite": "缓存写 / 1M",
+    "actions": "操作"
+  },
+  "unpriced": "未配价",
+  "priced": "已配价",
+  "actions": {
+    "save": "保存",
+    "delete": "删除",
+    "refresh": "刷新"
+  },
+  "hint": {
+    "unit": "数值为美元 / 每百万 token（例如 3.00 = $3 / 1M）。输入与输出必填；缓存价格可选。",
+    "selectChannel": "选择一个渠道以配置其模型价格。",
+    "noModels": "该渠道暂无模型。请先在「渠道」页添加模型（或拉取模型列表）。"
+  },
+  "toast": {
+    "saved": "价格已保存",
+    "deleted": "价格已删除",
+    "loadFailed": "加载价格失败",
+    "saveFailed": "保存价格失败",
+    "deleteFailed": "删除价格失败",
+    "inputOutputRequired": "输入和输出价格必填且必须大于 0"
+  }
+}

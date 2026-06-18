@@ -1,0 +1,355 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Agent Router Platform - self-contained deployment.
+  Creates a VPC (2 public subnets across AZs), an internet-facing Application
+  Load Balancer, and a single EC2 instance that git-clones the repo and runs the
+  full docker-compose stack (postgres + redis + backend + frontend). The ALB
+  forwards HTTP :80 to the frontend nginx (:8080) on the instance, and exposes a
+  public *.elb.amazonaws.com address (printed as the AlbUrl output).
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  RepoUrl:
+    Type: String
+    Description: Git repository URL to clone and build on the instance (must be reachable from the instance, e.g. a public HTTPS git URL).
+  RepoBranch:
+    Type: String
+    Default: main
+    Description: Branch (or ref) to check out.
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    Description: EC2 instance type. The image build needs RAM/CPU, so t3.medium is the floor; t3.small is too small to build the frontend reliably.
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Ubuntu 24.04 AMI (resolved from SSM Public Parameter Store; do not change unless you know why).
+
+  SshAllowedCidr:
+    Type: String
+    Default: ""
+    Description: Optional. If set (e.g. 1.2.3.4/32), opens SSH :22 to this CIDR. Leave blank to disable SSH entirely.
+
+  KeyName:
+    Type: String
+    Default: ""
+    Description: Optional EC2 key pair name for SSH. Leave blank for no key.
+
+  # ---- Application secrets (REQUIRED) ----
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: Secret that signs admin JWTs (HS256). Use a long random string.
+  SecretKey:
+    Type: String
+    NoEcho: true
+    Description: Secret that encrypts stored channel upstream keys (AES-256-GCM). Use a long random string.
+  PostgresPassword:
+    Type: String
+    NoEcho: true
+    Default: postgres
+    Description: PostgreSQL password.
+  RedisPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Optional Redis password (recommended for non-trivial deployments).
+
+  # ---- Optional bootstrap admin ----
+  AdminUsername:
+    Type: String
+    Default: ""
+    Description: Optional. If both AdminUsername and AdminPassword are set, an admin user is seeded on first start.
+  AdminPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Optional bootstrap admin password.
+
+Conditions:
+  HasSsh: !Not [!Equals [!Ref SshAllowedCidr, ""]]
+  HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ----- Network -----
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-2"
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-rt"
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  Subnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # ----- Security groups -----
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP ingress to the ALB.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Public HTTP
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-alb-sg"
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: App instance - accepts traffic from the ALB only (plus optional SSH).
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-instance-sg"
+
+  # App port (frontend nginx :8080) reachable only from the ALB SG.
+  InstanceIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref InstanceSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: App traffic from the ALB
+
+  InstanceIngressSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasSsh
+    Properties:
+      GroupId: !Ref InstanceSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SshAllowedCidr
+      Description: SSH (optional)
+
+  # ----- Load balancer -----
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-tg"
+      VpcId: !Ref Vpc
+      Protocol: HTTP
+      Port: 8080
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /api/ping
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        # Long deregistration drain is unnecessary for a single box.
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Targets:
+        - Id: !Ref AppInstance
+          Port: 8080
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ----- EC2 instance -----
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref "AWS::NoValue"]
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-app"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/usr/bin/env bash
+          # Cloud-init bootstrap: install Docker, clone the repo, write .env, bring the stack up.
+          set -eux
+          exec > /var/log/arp-bootstrap.log 2>&1
+
+          # 1G swap cushion so the build never OOM-kills on a small box.
+          if ! swapon --show | grep -q /swapfile; then
+            fallocate -l 1G /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          fi
+
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y
+          apt-get install -y ca-certificates curl gnupg git
+
+          # Docker official repo + engine + compose plugin.
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          chmod a+r /etc/apt/keyrings/docker.gpg
+          . /etc/os-release
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${!VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update -y
+          apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+          systemctl enable --now docker
+
+          # Clone the application repo.
+          git clone --branch "${RepoBranch}" --depth 1 "${RepoUrl}" /opt/agent-router
+          cd /opt/agent-router
+
+          # Write .env consumed by docker-compose. HTTP_PORT=8080 is the ALB target port.
+          cat > .env <<EOF
+          HTTP_PORT=8080
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=${PostgresPassword}
+          POSTGRES_DB=agent_router
+          POSTGRES_SSLMODE=disable
+          REDIS_PASSWORD=${RedisPassword}
+          REDIS_DB=0
+          JWT_SECRET=${JwtSecret}
+          SECRET_KEY=${SecretKey}
+          GIN_MODE=release
+          ADMIN_USERNAME=${AdminUsername}
+          ADMIN_PASSWORD=${AdminPassword}
+          EOF
+          chmod 600 .env
+
+          # Build and start the four-service stack. Capture the result so we can
+          # report it to CloudFormation rather than always signalling success.
+          BUILD_RC=0
+          docker compose --env-file .env up -d --build || BUILD_RC=$?
+
+          # Signal CloudFormation that bootstrap finished. aws-cfn-bootstrap ships
+          # cfn-signal; on Ubuntu 24.04 pip is externally managed, hence the flag.
+          apt-get install -y python3-pip
+          pip3 install --break-system-packages https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+          cfn-signal -e "$BUILD_RC" --stack ${AWS::StackName} --resource AppInstance --region ${AWS::Region} || true
+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT20M
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  AlbUrl:
+    Description: Public URL of the platform (open this in a browser; first account registered becomes admin).
+    Value: !Sub "http://${LoadBalancer.DNSName}"
+  AlbDnsName:
+    Description: Raw ALB DNS name.
+    Value: !GetAtt LoadBalancer.DNSName
+  InstanceId:
+    Description: EC2 instance id (for SSH / debugging the bootstrap log at /var/log/arp-bootstrap.log).
+    Value: !Ref AppInstance
+  VpcId:
+    Value: !Ref Vpc

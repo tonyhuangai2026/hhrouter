@@ -1,0 +1,27 @@
+{
+  "title": "登录",
+  "subtitle": "Agent Router Platform",
+  "fields": {
+    "username": {
+      "label": "用户名",
+      "placeholder": "请输入用户名"
+    },
+    "password": {
+      "label": "密码",
+      "placeholder": "请输入密码"
+    }
+  },
+  "validation": {
+    "usernameRequired": "请输入用户名",
+    "passwordRequired": "请输入密码"
+  },
+  "submit": "登录",
+  "switch": {
+    "prompt": "还没有账号？",
+    "link": "注册"
+  },
+  "messages": {
+    "success": "登录成功",
+    "failed": "登录失败，请检查您的凭据。"
+  }
+}

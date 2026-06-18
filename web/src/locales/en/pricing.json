@@ -1,0 +1,36 @@
+{
+  "title": "Model pricing",
+  "subtitle": "Configure per-channel, per-model prices in USD per 1M tokens. Only models with an input and output price can be requested.",
+  "filters": {
+    "channel": "Channel",
+    "channelPlaceholder": "Select a channel"
+  },
+  "columns": {
+    "model": "Model",
+    "input": "Input / 1M",
+    "output": "Output / 1M",
+    "cacheRead": "Cache read / 1M",
+    "cacheWrite": "Cache write / 1M",
+    "actions": "Actions"
+  },
+  "unpriced": "Not priced",
+  "priced": "Priced",
+  "actions": {
+    "save": "Save",
+    "delete": "Delete",
+    "refresh": "Refresh"
+  },
+  "hint": {
+    "unit": "Values are USD per 1,000,000 tokens (e.g. 3.00 = $3 / 1M). Input and output are required; cache prices are optional.",
+    "selectChannel": "Select a channel to configure its model prices.",
+    "noModels": "This channel has no models. Add models on the Channels page (or fetch them) first."
+  },
+  "toast": {
+    "saved": "Price saved",
+    "deleted": "Price removed",
+    "loadFailed": "Failed to load prices",
+    "saveFailed": "Failed to save price",
+    "deleteFailed": "Failed to remove price",
+    "inputOutputRequired": "Input and output prices are required and must be greater than 0"
+  }
+}

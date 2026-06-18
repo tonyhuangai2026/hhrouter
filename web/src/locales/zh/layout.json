@@ -1,0 +1,35 @@
+{
+  "appName": "Agent Router",
+  "systemName": "Agent Router 平台",
+  "nav": {
+    "dashboard": "仪表盘",
+    "channels": "渠道",
+    "rules": "路由规则",
+    "tokens": "API Key",
+    "logs": "请求日志",
+    "playground": "Playground",
+    "pricing": "价格",
+    "users": "用户",
+    "profile": "个人资料"
+  },
+  "userMenu": {
+    "profile": "个人资料",
+    "logout": "退出登录"
+  },
+  "theme": {
+    "toLight": "切换到浅色模式",
+    "toDark": "切换到深色模式"
+  },
+  "language": {
+    "label": "语言",
+    "zh": "中文",
+    "en": "English"
+  },
+  "user": {
+    "fallbackName": "用户"
+  },
+  "placeholder": {
+    "title": "敬请期待",
+    "description": "该页面将在后续任务中实现。"
+  }
+}

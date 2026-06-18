@@ -1,0 +1,64 @@
+{
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "ok": "OK",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "add": "Add",
+    "update": "Update",
+    "submit": "Submit",
+    "search": "Search",
+    "reset": "Reset",
+    "refresh": "Refresh",
+    "close": "Close",
+    "back": "Back",
+    "copy": "Copy",
+    "test": "Test",
+    "view": "View",
+    "more": "More"
+  },
+  "labels": {
+    "actions": "Actions",
+    "status": "Status",
+    "name": "Name",
+    "type": "Type",
+    "createdAt": "Created At",
+    "updatedAt": "Updated At",
+    "all": "All",
+    "yes": "Yes",
+    "no": "No",
+    "unlimited": "Unlimited",
+    "optional": "Optional",
+    "required": "Required"
+  },
+  "status": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "active": "Active",
+    "inactive": "Inactive",
+    "success": "Success",
+    "failed": "Failed",
+    "pending": "Pending"
+  },
+  "state": {
+    "loading": "Loading...",
+    "noData": "No data",
+    "empty": "Nothing here yet"
+  },
+  "messages": {
+    "success": "Success",
+    "failed": "Operation failed",
+    "saved": "Saved successfully",
+    "created": "Created successfully",
+    "updated": "Updated successfully",
+    "deleted": "Deleted successfully",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed",
+    "confirmDelete": "Are you sure you want to delete this item?",
+    "confirmDeleteTitle": "Confirm deletion",
+    "operationFailed": "Operation failed, please try again"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "title": "创建账号",
+  "subtitle": "Agent Router Platform",
+  "firstAccountNotice": "首个账号将成为管理员。",
+  "fields": {
+    "username": {
+      "label": "用户名",
+      "placeholder": "请设置用户名"
+    },
+    "password": {
+      "label": "密码",
+      "placeholder": "请设置密码"
+    },
+    "confirmPassword": {
+      "label": "确认密码",
+      "placeholder": "请再次输入密码"
+    }
+  },
+  "validation": {
+    "usernameRequired": "请输入用户名",
+    "passwordRequired": "请输入密码",
+    "confirmRequired": "请确认您的密码",
+    "passwordMismatch": "两次输入的密码不一致"
+  },
+  "submit": "注册",
+  "switch": {
+    "prompt": "已有账号？",
+    "link": "登录"
+  },
+  "messages": {
+    "success": "注册成功",
+    "failed": "注册失败。"
+  }
+}

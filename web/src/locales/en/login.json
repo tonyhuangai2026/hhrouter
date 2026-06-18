@@ -1,0 +1,27 @@
+{
+  "title": "Sign in",
+  "subtitle": "Agent Router Platform",
+  "fields": {
+    "username": {
+      "label": "Username",
+      "placeholder": "Enter username"
+    },
+    "password": {
+      "label": "Password",
+      "placeholder": "Enter password"
+    }
+  },
+  "validation": {
+    "usernameRequired": "Username is required",
+    "passwordRequired": "Password is required"
+  },
+  "submit": "Sign in",
+  "switch": {
+    "prompt": "No account? ",
+    "link": "Register"
+  },
+  "messages": {
+    "success": "Logged in",
+    "failed": "Login failed. Check your credentials."
+  }
+}

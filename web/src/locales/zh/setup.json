@@ -1,0 +1,15 @@
+{
+  "documentTitle": "初始化设置 - Agent Router Platform",
+  "checkingStatus": "正在检查系统状态...",
+  "welcomeTitle": "欢迎使用 Agent Router Platform",
+  "firstDeploy": {
+    "guidance": "系统中尚无任何账号，请创建第一个账号以开始使用。",
+    "adminNotice": "首个账号将成为管理员。",
+    "createButton": "创建第一个账号"
+  },
+  "error": {
+    "description": "无法连接后端以确定初始化状态。",
+    "goLogin": "前往登录",
+    "register": "注册"
+  }
+}

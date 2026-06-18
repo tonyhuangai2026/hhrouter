@@ -1,0 +1,49 @@
+{
+  "title": "How to use this API key",
+  "subtitle": "Copy-paste configuration for popular clients. Requests are routed by model name through this gateway.",
+  "back": "Back to keys",
+  "copyBaseUrl": "Copy base URL",
+  "baseUrlLabel": "Base URL",
+  "context": {
+    "name": "Name",
+    "group": "Group",
+    "key": "Key"
+  },
+  "keyNotice": "Use the key you copied when you created this token. For security the full key is shown only once at creation and cannot be retrieved again — the examples below use the placeholder `sk-YOUR_API_KEY`, so replace it with your real key.",
+  "modelNote": "The model below is just an example. Use a model that one of your channels actually serves — list available models with `GET {{apiBase}}/models`.",
+  "routingNote": "This key belongs to group **{{group}}**, so it routes to channels configured for that group.",
+  "notFound": {
+    "title": "Key not found",
+    "desc": "This API key no longer exists or you do not have access to it.",
+    "back": "Back to keys"
+  },
+  "tabs": {
+    "claudeCode": "Claude Code",
+    "codex": "Codex",
+    "litellm": "litellm",
+    "openai": "openai (Python)",
+    "curl": "curl"
+  },
+  "copy": {
+    "button": "Copy",
+    "copied": "Copied to clipboard",
+    "failed": "Could not copy automatically — select and copy manually."
+  },
+  "clients": {
+    "claudeCode": {
+      "body": "Claude Code speaks the Anthropic Messages API. Point it at this gateway and use your key as the auth token, then launch `claude`:\n\n```bash\nexport ANTHROPIC_BASE_URL={{baseUrl}}\nexport ANTHROPIC_AUTH_TOKEN=sk-YOUR_API_KEY\n# optional: pin the model Claude Code should use\nexport ANTHROPIC_MODEL={{model}}\nclaude\n```\n\nThe gateway accepts the credential Claude Code sends (both `x-api-key` and `Authorization: Bearer` work). Requests hit `{{apiBase}}/messages` and are routed by model name."
+    },
+    "codex": {
+      "body": "Codex CLI is OpenAI-compatible. The quickest way is environment variables:\n\n```bash\nexport OPENAI_BASE_URL={{apiBase}}\nexport OPENAI_API_KEY=sk-YOUR_API_KEY\ncodex --model {{model}}\n```\n\nOr define a custom provider in `~/.codex/config.toml`:\n\n```toml\nmodel = \"{{model}}\"\nmodel_provider = \"agent-router\"\n\n[model_providers.agent-router]\nname = \"Agent Router\"\nbase_url = \"{{apiBase}}\"\nenv_key = \"OPENAI_API_KEY\"\n```\n\nConfig keys vary slightly between Codex versions — check `codex --help` if a field name differs."
+    },
+    "litellm": {
+      "body": "Use the `openai/` prefix so litellm calls this gateway over the OpenAI-compatible endpoint:\n\n```python\nimport litellm\n\nresp = litellm.completion(\n    model=\"openai/{{model}}\",\n    api_base=\"{{apiBase}}\",\n    api_key=\"sk-YOUR_API_KEY\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(resp.choices[0].message.content)\n```"
+    },
+    "openai": {
+      "body": "Point the official OpenAI Python SDK at the gateway base URL:\n\n```python\nfrom openai import OpenAI\n\nclient = OpenAI(base_url=\"{{apiBase}}\", api_key=\"sk-YOUR_API_KEY\")\nresp = client.chat.completions.create(\n    model=\"{{model}}\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(resp.choices[0].message.content)\n```\n\nStreaming works too — pass `stream=True` and iterate the chunks."
+    },
+    "curl": {
+      "body": "The gateway exposes both an OpenAI-compatible endpoint and the Anthropic Messages endpoint.\n\n**OpenAI-compatible** (`Authorization: Bearer`):\n\n```bash\ncurl {{apiBase}}/chat/completions \\\n  -H \"Authorization: Bearer sk-YOUR_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{model}}\",\n    \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n  }'\n```\n\n**Anthropic Messages** (`x-api-key` + `anthropic-version`):\n\n```bash\ncurl {{apiBase}}/messages \\\n  -H \"x-api-key: sk-YOUR_API_KEY\" \\\n  -H \"anthropic-version: 2023-06-01\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{model}}\",\n    \"max_tokens\": 1024,\n    \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n  }'\n```"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "title": "Playground",
+  "subtitle": "Admin direct chat test against a chosen channel and model (no quota, bypasses routing).",
+  "config": {
+    "title": "Settings",
+    "channel": "Channel",
+    "channelPlaceholder": "Select a channel",
+    "model": "Model",
+    "modelPlaceholder": "Select a model",
+    "modelManualPlaceholder": "Enter a model name",
+    "modelManual": "Enter model manually",
+    "noModelsHint": "This channel has no models yet. Run \"Fetch models\" on the Channels page first, or type a model name below.",
+    "stream": "Streaming",
+    "maxTokens": "Max tokens",
+    "temperature": "Temperature",
+    "advanced": "Advanced parameters",
+    "system": "System prompt (optional)",
+    "systemPlaceholder": "Optional: set a system prompt; it is prepended to the history on send."
+  },
+  "chat": {
+    "title": "Conversation"
+  },
+  "roles": {
+    "user": "User",
+    "assistant": "Assistant",
+    "system": "System"
+  },
+  "input": {
+    "placeholder": "Type a message. Enter to send, Shift+Enter for newline. Paste images or add an image URL.",
+    "imageUrlPlaceholder": "Paste an image URL (http or data:)",
+    "addImageUrl": "Add image URL",
+    "uploadImage": "Upload image",
+    "attachments": "Attachments",
+    "removeImage": "Remove image",
+    "imageUrlInvalid": "Invalid image URL — must start with http(s):// or data:."
+  },
+  "actions": {
+    "send": "Send",
+    "stop": "Stop",
+    "clear": "Clear conversation",
+    "newChat": "New chat",
+    "copy": "Copy",
+    "regenerate": "Regenerate"
+  },
+  "usage": {
+    "title": "Usage",
+    "promptTokens": "Prompt tokens",
+    "completionTokens": "Completion tokens",
+    "totalTokens": "Total tokens"
+  },
+  "status": {
+    "streaming": "Generating…",
+    "empty": "Select a channel and model to start chatting.",
+    "emptyTitle": "Start a conversation",
+    "noOutput": "No output this turn"
+  },
+  "errors": {
+    "noChannel": "Please select a channel first.",
+    "noModel": "Please select or enter a model name.",
+    "emptyMessage": "Please enter a message or attach an image.",
+    "sendFailed": "Failed to send",
+    "imageReadFailed": "Failed to read image.",
+    "imageTooLarge": "Image too large, please use one smaller than {{max}}."
+  },
+  "toast": {
+    "cleared": "Conversation cleared",
+    "stopped": "Generation stopped",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed"
+  }
+}

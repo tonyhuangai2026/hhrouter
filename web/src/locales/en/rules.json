@@ -1,0 +1,61 @@
+{
+  "title": "Routing Rules",
+  "actions": {
+    "newRule": "New rule",
+    "editRule": "Edit rule",
+    "createRule": "New rule"
+  },
+  "columns": {
+    "priority": "Priority",
+    "name": "Name",
+    "match": "Match (condition)",
+    "targetChannels": "Target channels",
+    "enabled": "Enabled"
+  },
+  "form": {
+    "name": "Name",
+    "nameRequired": "Name is required",
+    "priority": "Priority (lower matches first)",
+    "enabled": "Enabled",
+    "matchSectionTitle": "Match condition (empty field = unconstrained)",
+    "groups": "Key groups",
+    "groupsPlaceholder": "e.g. vip",
+    "models": "Models (supports * wildcard)",
+    "modelsPlaceholder": "e.g. gpt-4o, claude-*",
+    "minTokens": "Min tokens",
+    "maxTokens": "Max tokens",
+    "targetSectionTitle": "Target",
+    "targetChannels": "Target channels",
+    "targetChannelsPlaceholder": "Select existing channels",
+    "targetGroup": "Or target group (optional alternative to channels)",
+    "targetGroupPlaceholder": "channel group label"
+  },
+  "match": {
+    "any": "any (no constraints)",
+    "groups": "groups: {{value}}",
+    "models": "models: {{value}}",
+    "min": "min: {{value}}",
+    "max": "max: {{value}}"
+  },
+  "target": {
+    "none": "none",
+    "group": "group: {{value}}"
+  },
+  "validation": {
+    "targetRequired": "Select at least one target channel or a target group."
+  },
+  "popconfirm": {
+    "deleteTitle": "Delete this rule?"
+  },
+  "toast": {
+    "loadChannelsFailed": "Failed to load channels",
+    "created": "Rule created",
+    "updated": "Rule updated",
+    "deleted": "Rule deleted",
+    "enabled": "Rule enabled",
+    "disabled": "Rule disabled",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed",
+    "updateFailed": "Update failed"
+  }
+}

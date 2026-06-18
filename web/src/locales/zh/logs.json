@@ -1,0 +1,58 @@
+{
+  "title": "请求明细日志",
+  "subtitle": "逐条请求的明细日志。管理员可查看全部用户，普通用户仅查看自己的记录。",
+  "actions": {
+    "refresh": "刷新",
+    "resetFilters": "重置筛选"
+  },
+  "range": {
+    "today": "今天",
+    "7d": "近 7 天",
+    "30d": "近 30 天",
+    "custom": "自定义"
+  },
+  "filters": {
+    "channel": "渠道",
+    "model": "模型",
+    "status": "状态",
+    "user": "用户",
+    "noModels": "暂无模型"
+  },
+  "status": {
+    "all": "全部状态",
+    "success": "成功",
+    "error": "失败"
+  },
+  "scope": {
+    "ownUsage": "仅显示您自己的请求日志。管理员可查看全部用户并按用户筛选。"
+  },
+  "type": {
+    "label": "类型：",
+    "all": "全部",
+    "production": "生产",
+    "test": "测试"
+  },
+  "columns": {
+    "time": "时间",
+    "user": "用户",
+    "model": "模型",
+    "channel": "渠道",
+    "format": "格式",
+    "upstream": "上游",
+    "tokens": "Token（P/C/T）",
+    "latency": "延迟",
+    "ttftLabel": "首 token",
+    "latencyTooltipStream": "首 token {{ttft}} ms · 总计 {{total}} ms",
+    "latencyTooltipTotal": "总计 {{total}} ms",
+    "cost": "费用",
+    "costTooltip": "输入 {{prompt}} · 输出 {{completion}} · 缓存读 {{cacheRead}} · 写 {{cacheWrite}}",
+    "status": "状态"
+  },
+  "statusUnknown": "未知",
+  "empty": {
+    "noData": "所选筛选条件下暂无日志"
+  },
+  "errors": {
+    "loadLogs": "加载日志失败"
+  }
+}

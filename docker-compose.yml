@@ -1,0 +1,95 @@
+# Agent Router Platform — one-click deployment (Tech Design §2, §10).
+#
+# Brings up four services:
+#   postgres  : PostgreSQL 16 (named volume for persistence + healthcheck)
+#   redis     : Redis 7 (quota counters / model cache + healthcheck)
+#   backend   : Go relay+admin server (built from ./server, depends on db+redis healthy)
+#   frontend  : nginx serving the built SPA and reverse-proxying /api and /v1
+#
+# Quickstart:
+#   cp .env.example .env   # then edit secrets
+#   docker compose up -d
+# Open http://localhost:8080  (the first account you register becomes admin).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_router}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-agent_router}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # HTTP
+      PORT: "3000"
+      GIN_MODE: ${GIN_MODE:-release}
+      # PostgreSQL (config.go assembles the DSN from POSTGRES_*)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_router}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-disable}
+      # Redis
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      # Secrets (REQUIRED — set strong values in .env)
+      JWT_SECRET: ${JWT_SECRET:-please-change-me-jwt}
+      SECRET_KEY: ${SECRET_KEY:-please-change-me-secret}
+      # Optional bootstrap admin (seeded on first start if BOTH are set)
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+
+volumes:
+  pgdata:
+  redisdata:

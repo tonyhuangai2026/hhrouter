@@ -1,0 +1,25 @@
+{
+  "title": "Profile",
+  "sections": {
+    "account": "Account Information",
+    "preferences": "Preferences"
+  },
+  "fields": {
+    "username": "Username",
+    "displayName": "Display name",
+    "email": "Email",
+    "role": "Role",
+    "status": "Status",
+    "quota": "Quota",
+    "used": "Used"
+  },
+  "roles": {
+    "admin": "Admin",
+    "user": "User"
+  },
+  "language": {
+    "label": "Interface Language",
+    "description": "Choose the interface language; it applies across the whole app immediately."
+  },
+  "empty": "-"
+}
