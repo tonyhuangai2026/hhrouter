@@ -37,6 +37,7 @@
     "user": "User",
     "model": "Model",
     "channel": "Channel",
+    "key": "Key",
     "format": "Format",
     "upstream": "Upstream",
     "tokens": "Tokens (P/C/T)",

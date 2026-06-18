@@ -89,6 +89,10 @@ type LogRow struct {
 	model.RequestLog
 	Username    string `json:"username"`
 	ChannelName string `json:"channel_name"`
+	// TokenName is the name of the downstream API key (token) that made the
+	// request, joined from tokens.name. Empty for test-chat rows (token_id NULL)
+	// and for rows whose token was since deleted.
+	TokenName string `json:"token_name"`
 	// ChannelType is the upstream kind (openai/bedrock/anthropic) joined from the
 	// channel, so the listing can show which upstream actually served the request
 	// (more useful than inbound_format, which for test-chat is always "openai").
@@ -120,9 +124,10 @@ func (s *LogService) List(f LogFilter, page, pageSize int) ([]LogRow, int64, err
 	// Left joins so a log whose channel/user was since deleted still lists.
 	q := s.applyFilterPrefixed(
 		s.db.Table("request_logs AS rl").
-			Select("rl.*, u.username AS username, c.name AS channel_name, c.type AS channel_type").
+			Select("rl.*, u.username AS username, c.name AS channel_name, c.type AS channel_type, t.name AS token_name").
 			Joins("LEFT JOIN users u ON u.id = rl.user_id").
-			Joins("LEFT JOIN channels c ON c.id = rl.channel_id"),
+			Joins("LEFT JOIN channels c ON c.id = rl.channel_id").
+			Joins("LEFT JOIN tokens t ON t.id = rl.token_id"),
 		f,
 	)
 	if err := q.

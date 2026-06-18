@@ -18,7 +18,7 @@ func newLogTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := gdb.AutoMigrate(&model.User{}, &model.Channel{}, &model.RequestLog{}); err != nil {
+	if err := gdb.AutoMigrate(&model.User{}, &model.Channel{}, &model.Token{}, &model.RequestLog{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return gdb
@@ -214,6 +214,42 @@ func TestList_PaginationFilterAndScoping(t *testing.T) {
 	_, allTotal, _ := svc.List(LogFilter{}, 1, 50)
 	if allTotal != 4 {
 		t.Fatalf("admin total = %d, want 4", allTotal)
+	}
+}
+
+// TestList_TokenNameJoin verifies the listing surfaces the API key (token) name
+// for keyed production rows, and leaves it empty for token-less (test-chat) rows.
+func TestList_TokenNameJoin(t *testing.T) {
+	db := newLogTestDB(t)
+	db.Create(&model.User{Username: "alice"})
+	db.Create(&model.Channel{Name: "openai-main", Type: model.ChannelOpenAI})
+	db.Create(&model.Token{UserID: 1, Name: "prod-key", KeyHash: "h1", Status: model.TokenEnabled})
+
+	tokenID := uint(1)
+	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	// Keyed production row + a token-less test-chat row.
+	keyed := model.RequestLog{UserID: 1, TokenID: &tokenID, ChannelID: 1, Model: "gpt-4o", Status: model.LogSuccess, InboundFormat: model.InboundOpenAI, CreatedAt: base.Add(time.Hour)}
+	test := model.RequestLog{UserID: 1, TokenID: nil, ChannelID: 1, Model: "gpt-4o", Status: model.LogSuccess, InboundFormat: model.InboundOpenAI, IsTest: true, CreatedAt: base}
+	if err := db.Create(&keyed).Error; err != nil {
+		t.Fatalf("seed keyed: %v", err)
+	}
+	if err := db.Create(&test).Error; err != nil {
+		t.Fatalf("seed test: %v", err)
+	}
+
+	rows, _, err := NewLogService(db).List(LogFilter{}, 1, 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	// Newest first → keyed row at index 0.
+	if rows[0].TokenName != "prod-key" {
+		t.Errorf("keyed row token_name = %q, want prod-key", rows[0].TokenName)
+	}
+	if rows[1].TokenName != "" {
+		t.Errorf("test-chat row token_name = %q, want empty", rows[1].TokenName)
 	}
 }
 

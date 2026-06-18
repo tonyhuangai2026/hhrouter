@@ -361,6 +361,21 @@ export default function Logs() {
         },
       },
       {
+        title: t('columns.key'),
+        dataIndex: 'token_name',
+        width: 140,
+        render: (v, r) => {
+          // The downstream API key (token) name. test-chat rows have no token
+          // (token_id NULL → empty name); show a muted placeholder for those.
+          const name = v ?? r.tokenName;
+          if (!name) {
+            const isTest = r.is_test ?? r.isTest;
+            return <Text type="tertiary">{isTest ? t('type.test') : '-'}</Text>;
+          }
+          return <Tag color="cyan" size="small" style={{ maxWidth: 130 }}>{name}</Tag>;
+        },
+      },
+      {
         title: t('columns.upstream'),
         dataIndex: 'channel_type',
         width: 110,
