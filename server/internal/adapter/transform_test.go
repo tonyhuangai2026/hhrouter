@@ -391,10 +391,15 @@ func TestBuildOpenAIStreamChunk(t *testing.T) {
 		t.Errorf("finish_reason = %v, want length", choices[0]["finish_reason"])
 	}
 
-	// usage tail
-	out = BuildOpenAIStreamChunk("m", StreamChunk{Usage: &Usage{TotalTokens: 12}})
+	// usage-only chunk (Anthropic message_start prompt tokens, or include_usage
+	// tail): must carry usage AND an EMPTY choices array. choices:[{delta:{}}]
+	// makes strict clients (opencode) fail union validation.
+	out = BuildOpenAIStreamChunk("m", StreamChunk{Usage: &Usage{TotalTokens: 12, PromptTokens: 12}})
 	if out["usage"].(map[string]any)["total_tokens"] != 12 {
 		t.Errorf("usage = %+v", out["usage"])
+	}
+	if uc := out["choices"].([]map[string]any); len(uc) != 0 {
+		t.Errorf("usage-only chunk choices = %+v, want empty array", uc)
 	}
 
 	// pure [DONE]

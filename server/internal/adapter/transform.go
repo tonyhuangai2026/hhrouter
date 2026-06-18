@@ -349,6 +349,37 @@ func BuildOpenAIStreamChunk(model string, c StreamChunk) map[string]any {
 	if c.Done && c.Delta == "" && c.StopReason == StopUnknown && c.Usage == nil && c.ToolCallDelta == nil {
 		return nil
 	}
+
+	usageObj := func() map[string]any {
+		if c.Usage == nil {
+			return nil
+		}
+		return map[string]any{
+			"prompt_tokens":     c.Usage.PromptTokens,
+			"completion_tokens": c.Usage.CompletionTokens,
+			"total_tokens":      c.Usage.TotalTokens,
+		}
+	}
+
+	// A chunk that carries ONLY usage (no content delta, no tool call, no stop
+	// reason) must use an EMPTY choices array — the OpenAI streaming contract for
+	// the include_usage chunk. This is exactly what an Anthropic message_start
+	// (prompt tokens, no content) maps to. Emitting choices:[{delta:{}}] makes
+	// strict clients (opencode) fail union validation ("No matching discriminator")
+	// because an empty delta matches none of their chunk variants.
+	hasContent := c.Delta != "" || c.ToolCallDelta != nil || c.StopReason != StopUnknown
+	if !hasContent {
+		out := map[string]any{
+			"object":  "chat.completion.chunk",
+			"model":   model,
+			"choices": []map[string]any{},
+		}
+		if u := usageObj(); u != nil {
+			out["usage"] = u
+		}
+		return out
+	}
+
 	delta := map[string]any{}
 	if c.Delta != "" {
 		delta["content"] = c.Delta
@@ -377,12 +408,8 @@ func BuildOpenAIStreamChunk(model string, c StreamChunk) map[string]any {
 		"model":   model,
 		"choices": []map[string]any{choice},
 	}
-	if c.Usage != nil {
-		out["usage"] = map[string]any{
-			"prompt_tokens":     c.Usage.PromptTokens,
-			"completion_tokens": c.Usage.CompletionTokens,
-			"total_tokens":      c.Usage.TotalTokens,
-		}
+	if u := usageObj(); u != nil {
+		out["usage"] = u
 	}
 	return out
 }

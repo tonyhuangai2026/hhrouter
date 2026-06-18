@@ -106,17 +106,29 @@ type anthropicMessageResponse struct {
 // error and ignores the framing-only events (ping / content_block_start/stop).
 type anthropicStreamEvent struct {
 	Type string `json:"type"`
+	// content_block_start / content_block_delta / content_block_stop carry the
+	// block position so streamed tool calls can be grouped by index.
+	Index int `json:"index"`
 	// message_start carries the initial usage (input_tokens).
 	Message *struct {
 		Model string          `json:"model"`
 		Usage *anthropicUsage `json:"usage"`
 	} `json:"message"`
-	// content_block_delta carries delta.{type,text}; message_delta carries
-	// delta.stop_reason.
+	// content_block_start carries the opening block; for a tool call it is
+	// {type:"tool_use", id, name} (input streams later via input_json_delta).
+	ContentBlock *struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"content_block"`
+	// content_block_delta carries delta.{type,text}; a tool call's arguments
+	// stream as delta.{type:"input_json_delta", partial_json}; message_delta
+	// carries delta.stop_reason.
 	Delta *struct {
-		Type       string `json:"type"`
-		Text       string `json:"text"`
-		StopReason string `json:"stop_reason"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	// message_delta carries the cumulative output_tokens.
 	Usage *anthropicUsage `json:"usage"`
@@ -280,11 +292,33 @@ func (a *AnthropicAdapter) ParseStreamChunk(_ string, payload []byte) (StreamChu
 		}
 		return out, out.Usage != nil, nil
 
+	case "content_block_start":
+		// A tool_use block opens here, carrying its id + name; the arguments
+		// stream afterwards as input_json_delta. Emit the opening tool-call delta
+		// so cross-format output (e.g. OpenAI tool_calls) can start the call. A
+		// text block's content_block_start has nothing to emit.
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
+			return StreamChunk{ToolCallDelta: &ToolCallDelta{
+				Index: ev.Index,
+				ID:    ev.ContentBlock.ID,
+				Name:  ev.ContentBlock.Name,
+			}}, true, nil
+		}
+		return StreamChunk{}, false, nil
+
 	case "content_block_delta":
 		if ev.Delta != nil && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
 			return StreamChunk{Delta: ev.Delta.Text}, true, nil
 		}
-		// thinking_delta / input_json_delta / empty → nothing to emit.
+		// A tool call's arguments stream as input_json_delta.partial_json — carry
+		// the fragment so the client can concatenate the JSON arguments.
+		if ev.Delta != nil && ev.Delta.Type == "input_json_delta" && ev.Delta.PartialJSON != "" {
+			return StreamChunk{ToolCallDelta: &ToolCallDelta{
+				Index:        ev.Index,
+				ArgsFragment: ev.Delta.PartialJSON,
+			}}, true, nil
+		}
+		// thinking_delta / empty → nothing to emit.
 		return StreamChunk{}, false, nil
 
 	case "message_delta":

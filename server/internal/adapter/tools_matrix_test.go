@@ -225,6 +225,60 @@ func TestBedrockAdapter_ParseStreamChunk_ToolUse(t *testing.T) {
 	}
 }
 
+// ===================== Anthropic stream: tool_use (cross-format) =============
+
+// When an Anthropic UPSTREAM streams a tool call and the OUTPUT is OpenAI (the
+// opencode path: OpenAI inbound → Anthropic upstream), the adapter must surface
+// the tool call via ToolCallDelta so the OpenAI stream builder can emit
+// tool_calls. content_block_start carries id+name; input_json_delta carries the
+// arguments fragments.
+func TestAnthropicAdapter_ParseStreamChunk_ToolUse(t *testing.T) {
+	a := NewAnthropicAdapter(stubDecryptor{})
+
+	// content_block_start with a tool_use block → opening tool-call delta.
+	start := []byte(`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}`)
+	c1, m1, err := a.ParseStreamChunk("", start)
+	if err != nil || !m1 {
+		t.Fatalf("content_block_start not meaningful: %+v err=%v", c1, err)
+	}
+	if c1.ToolCallDelta == nil || c1.ToolCallDelta.ID != "toolu_1" || c1.ToolCallDelta.Name != "get_weather" || c1.ToolCallDelta.Index != 1 {
+		t.Fatalf("tool-use start delta wrong: %+v", c1.ToolCallDelta)
+	}
+
+	// content_block_delta with input_json_delta → arguments fragment.
+	frag := []byte(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}`)
+	c2, m2, err := a.ParseStreamChunk("", frag)
+	if err != nil || !m2 {
+		t.Fatalf("input_json_delta not meaningful: %+v err=%v", c2, err)
+	}
+	if c2.ToolCallDelta == nil || c2.ToolCallDelta.ArgsFragment != `{"city":` || c2.ToolCallDelta.Index != 1 {
+		t.Fatalf("tool-use args delta wrong: %+v", c2.ToolCallDelta)
+	}
+
+	// A text_delta still works (regression).
+	txt := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`)
+	c3, m3, _ := a.ParseStreamChunk("", txt)
+	if !m3 || c3.Delta != "hi" || c3.ToolCallDelta != nil {
+		t.Fatalf("text delta regressed: %+v", c3)
+	}
+}
+
+// End-to-end at the builder level: an Anthropic tool-use stream chunk, rendered
+// to an OpenAI stream chunk, must produce a tool_calls delta.
+func TestAnthropicToolUse_RendersOpenAIToolCallChunk(t *testing.T) {
+	a := NewAnthropicAdapter(stubDecryptor{})
+	start, _, _ := a.ParseStreamChunk("", []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_9","name":"calc"}}`))
+	obj := BuildOpenAIStreamChunk("gpt-4o", start)
+	if obj == nil {
+		t.Fatal("nil OpenAI chunk for tool-use start")
+	}
+	delta := obj["choices"].([]map[string]any)[0]["delta"].(map[string]any)
+	tcs, ok := delta["tool_calls"].([]map[string]any)
+	if !ok || len(tcs) != 1 || tcs[0]["id"] != "toolu_9" {
+		t.Fatalf("OpenAI tool_calls not emitted from anthropic tool-use: %+v", delta)
+	}
+}
+
 // ===================== Cross-format response builders =========================
 
 func TestBuildOpenAIResponse_ToolCalls(t *testing.T) {
