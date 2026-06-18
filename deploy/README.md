@@ -53,6 +53,55 @@ Docker build and signal success, so when `deploy` returns the app is already ser
 | `AdminUsername` / `AdminPassword` | no | empty | If both set, an admin is seeded on first start (otherwise register via the UI). |
 | `SshAllowedCidr` + `KeyName` | no | empty | Set both to enable SSH `:22` from that CIDR for debugging. |
 
+## Updating an existing deployment
+
+After you push new code to the repo, there are two ways to roll it out.
+
+### Option A — CloudFormation redeploy (clean, replaces the instance)
+
+Bump the `DeployVersion` parameter and run `update-stack`. Changing it alters the
+instance's UserData, so CloudFormation **replaces** the instance: a fresh box
+boots, re-clones the latest `RepoBranch`, and rebuilds the stack.
+
+```bash
+aws cloudformation update-stack \
+  --region us-east-1 \
+  --stack-name <stack> \
+  --use-previous-template \
+  --parameters \
+      ParameterKey=DeployVersion,ParameterValue=2 \
+      ParameterKey=RepoUrl,UsePreviousValue=true \
+      ParameterKey=RepoBranch,UsePreviousValue=true \
+      ParameterKey=InstanceType,UsePreviousValue=true \
+      ParameterKey=JwtSecret,UsePreviousValue=true \
+      ParameterKey=SecretKey,UsePreviousValue=true \
+      ParameterKey=PostgresPassword,UsePreviousValue=true \
+      ParameterKey=RedisPassword,UsePreviousValue=true
+```
+
+> Pass the **same** template (`--use-previous-template`) and increment
+> `DeployVersion` each time (2, 3, 4…). The ALB DNS name is unchanged, so the
+> public URL stays the same.
+>
+> ⚠️ **Data loss:** replacing the instance discards its EBS volume, so the
+> Postgres/Redis data on the box is lost (users, channels, keys, logs). This is
+> fine while still configuring, but for a live deployment with real data prefer
+> Option B, or move the database to RDS first.
+
+### Option B — in-place update (keeps data + URL, needs SSH)
+
+Deploy SSH access (`SshAllowedCidr` + `KeyName`), then on the box:
+
+```bash
+ssh ubuntu@<instance-ip>
+cd /opt/agent-router
+git pull
+docker compose --env-file .env up -d --build   # rebuilds only changed images
+```
+
+This rebuilds the containers in place — Postgres/Redis volumes are untouched, so
+all data and the ALB URL survive.
+
 ## Notes & limitations
 
 - **HTTP only.** Per the chosen scope this exposes plain HTTP on the ALB DNS name. For a

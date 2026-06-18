@@ -19,6 +19,15 @@ Parameters:
     Default: main
     Description: Branch (or ref) to check out.
 
+  DeployVersion:
+    Type: String
+    Default: "1"
+    Description: >
+      Redeploy trigger. Bump this value (e.g. 1 -> 2) and run update-stack to
+      replace the instance and re-clone the latest code from RepoUrl/RepoBranch.
+      Changing it forces a fresh instance; leaving it unchanged on update-stack
+      means the running instance is kept as-is.
+
   InstanceType:
     Type: String
     Default: t3.medium
@@ -287,6 +296,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/usr/bin/env bash
           # Cloud-init bootstrap: install Docker, clone the repo, write .env, bring the stack up.
+          # DeployVersion=${DeployVersion}  (bumping this in update-stack forces a fresh instance + re-clone)
           set -eux
           exec > /var/log/arp-bootstrap.log 2>&1
 
