@@ -53,8 +53,27 @@ func (a *BedrockAdapter) Name() string { return "bedrock" }
 // block (Text set) or an image block (Image set). On the wire each block carries
 // exactly one populated member.
 type bedrockContentBlock struct {
-	Text  string             `json:"text,omitempty"`
-	Image *bedrockImageBlock `json:"image,omitempty"`
+	Text       string                  `json:"text,omitempty"`
+	Image      *bedrockImageBlock      `json:"image,omitempty"`
+	ToolUse    *bedrockToolUseBlock    `json:"toolUse,omitempty"`
+	ToolResult *bedrockToolResultBlock `json:"toolResult,omitempty"`
+}
+
+// bedrockToolUseBlock is a Converse toolUse content block: the model's request to
+// call a tool. Input is the arguments JSON object.
+type bedrockToolUseBlock struct {
+	ToolUseID string          `json:"toolUseId"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+}
+
+// bedrockToolResultBlock is a Converse toolResult content block: the client's
+// returned tool output. Content is a list of result sub-blocks (we emit a single
+// {json} or {text} block).
+type bedrockToolResultBlock struct {
+	ToolUseID string           `json:"toolUseId"`
+	Content   []map[string]any `json:"content"`
+	Status    string           `json:"status,omitempty"`
 }
 
 // bedrockImageBlock is a Converse image content block:
@@ -93,6 +112,25 @@ type bedrockConverseRequest struct {
 	Messages        []bedrockMessage        `json:"messages"`
 	System          []bedrockSystemBlock    `json:"system,omitempty"`
 	InferenceConfig *bedrockInferenceConfig `json:"inferenceConfig,omitempty"`
+	ToolConfig      *bedrockToolConfig      `json:"toolConfig,omitempty"`
+}
+
+// bedrockToolConfig is the Converse toolConfig: the list of tool specs plus an
+// optional toolChoice.
+type bedrockToolConfig struct {
+	Tools      []bedrockTool  `json:"tools"`
+	ToolChoice map[string]any `json:"toolChoice,omitempty"`
+}
+
+// bedrockTool wraps one toolSpec ({name,description,inputSchema:{json:<schema>}}).
+type bedrockTool struct {
+	ToolSpec bedrockToolSpec `json:"toolSpec"`
+}
+
+type bedrockToolSpec struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"inputSchema"`
 }
 
 // bedrockUsage mirrors the Converse TokenUsage object. cacheReadInputTokens /
@@ -134,8 +172,23 @@ type bedrockConverseResponse struct {
 type bedrockContentBlockDelta struct {
 	ContentBlockIndex int `json:"contentBlockIndex"`
 	Delta             struct {
-		Text string `json:"text"`
+		Text    string `json:"text"`
+		ToolUse *struct {
+			Input string `json:"input"`
+		} `json:"toolUse"`
 	} `json:"delta"`
+}
+
+// bedrockContentBlockStart is the UNWRAPPED contentBlockStart event body. For a
+// tool call it carries start.toolUse.{toolUseId,name}; for text it is empty.
+type bedrockContentBlockStart struct {
+	ContentBlockIndex int `json:"contentBlockIndex"`
+	Start             struct {
+		ToolUse *struct {
+			ToolUseID string `json:"toolUseId"`
+			Name      string `json:"name"`
+		} `json:"toolUse"`
+	} `json:"start"`
 }
 
 // bedrockMessageStop is the UNWRAPPED messageStop event body.
@@ -378,10 +431,30 @@ func (a *BedrockAdapter) ParseStreamChunk(eventType string, payload []byte) (Str
 
 	var out StreamChunk
 	switch eventType {
+	case "contentBlockStart":
+		// A tool call begins here (start.toolUse.{toolUseId,name}); emit the
+		// opening tool-call delta. Plain text blocks have no start payload.
+		var ev bedrockContentBlockStart
+		if err := json.Unmarshal(trimmed, &ev); err != nil {
+			return out, false, nil // structural; ignore on decode trouble
+		}
+		if ev.Start.ToolUse != nil {
+			out.ToolCallDelta = &ToolCallDelta{
+				Index: ev.ContentBlockIndex,
+				ID:    ev.Start.ToolUse.ToolUseID,
+				Name:  ev.Start.ToolUse.Name,
+			}
+			return out, true, nil
+		}
+		return out, false, nil
 	case "contentBlockDelta":
 		var ev bedrockContentBlockDelta
 		if err := json.Unmarshal(trimmed, &ev); err != nil {
 			return StreamChunk{}, false, fmt.Errorf("bedrock adapter: decode contentBlockDelta: %w", err)
+		}
+		if ev.Delta.ToolUse != nil {
+			out.ToolCallDelta = &ToolCallDelta{Index: ev.ContentBlockIndex, ArgsFragment: ev.Delta.ToolUse.Input}
+			return out, true, nil
 		}
 		out.Delta = ev.Delta.Text
 	case "messageStop":
@@ -404,7 +477,7 @@ func (a *BedrockAdapter) ParseStreamChunk(eventType string, payload []byte) (Str
 		}
 		// metadata is the final event of the stream.
 		out.Done = true
-	case "messageStart", "contentBlockStart", "contentBlockStop":
+	case "messageStart", "contentBlockStop":
 		// Structural events with no inbound-visible payload.
 		return out, false, nil
 	default:

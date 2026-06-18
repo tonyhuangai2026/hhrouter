@@ -294,6 +294,23 @@ type StreamChunk struct {
 	// http_status, error_message). The parse error return stays reserved for
 	// genuine decode malformations (which remain skip-able).
 	UpstreamErr *UpstreamError `json:"-"`
+
+	// ToolCallDelta carries an incremental tool-call fragment when the upstream is
+	// streaming a tool/function call (OpenAI tool_calls deltas, Bedrock toolUse +
+	// input_json deltas). Nil for plain text chunks. The relay's cross-format
+	// stream builders emit the matching wire events from it.
+	ToolCallDelta *ToolCallDelta `json:"tool_call_delta,omitempty"`
+}
+
+// ToolCallDelta is one incremental piece of a streamed tool call. Index groups
+// fragments of the same call (a turn may stream several calls). ID/Name arrive on
+// the first fragment of a call; ArgsFragment carries a slice of the JSON
+// arguments string that the client concatenates across fragments.
+type ToolCallDelta struct {
+	Index        int    `json:"index"`
+	ID           string `json:"id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	ArgsFragment string `json:"args_fragment,omitempty"`
 }
 
 // Adapter builds upstream requests and parses upstream responses for one

@@ -39,12 +39,32 @@ type OpenAIChatInbound struct {
 	Temperature *float64               `json:"temperature,omitempty"`
 	TopP        *float64               `json:"top_p,omitempty"`
 	Stop        []string               `json:"stop,omitempty"`
+	// Tools is the OpenAI tool list ([{type:"function",function:{name,description,
+	// parameters}}]); ToolChoice the OpenAI tool_choice directive. Both are parsed
+	// into the canonical (Anthropic-shaped) unified representation by
+	// ParseOpenAIRequest so any upstream adapter can re-render them.
+	Tools      json.RawMessage `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 }
 
-// OpenAIInboundMessage allows content to be a string or a parts array.
+// OpenAIInboundMessage allows content to be a string or a parts array. tool_calls
+// (on an assistant turn) and tool_call_id (on a role=tool turn) carry the OpenAI
+// function-calling fields.
 type OpenAIInboundMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role       string           `json:"role"`
+	Content    json.RawMessage  `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+// openAIToolCall is one element of an assistant message's tool_calls array.
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	} `json:"function"`
 }
 
 // openAIContentToText flattens an OpenAI message content field (string or parts)
@@ -136,6 +156,9 @@ func ParseOpenAIRequest(in OpenAIChatInbound) UnifiedRequest {
 		TopP:          in.TopP,
 		StopSequences: in.Stop,
 	}
+	uni.Tools = openAIToolsToCanonical(in.Tools)
+	uni.ToolChoice = openAIToolChoiceToCanonical(in.ToolChoice)
+
 	var systems []string
 	for _, m := range in.Messages {
 		if m.Role == RoleSystem {
@@ -145,7 +168,22 @@ func ParseOpenAIRequest(in OpenAIChatInbound) UnifiedRequest {
 			}
 			continue
 		}
+		if m.Role == "tool" {
+			// An OpenAI tool result turn. OpenAI carries these as standalone
+			// role=tool messages; the canonical (Anthropic) model nests a
+			// tool_result block inside a user turn.
+			content := openAIToolResultContent(m.Content)
+			uni.Messages = append(uni.Messages, Message{
+				Role:    RoleUser,
+				Content: []ContentBlock{ToolResultBlockOf(m.ToolCallID, content, false)},
+			})
+			continue
+		}
 		blocks := openAIContentToBlocks(m.Content)
+		// Assistant tool_calls → tool_use blocks (appended after any text).
+		for _, tc := range m.ToolCalls {
+			blocks = append(blocks, ToolUseBlockOf(tc.ID, tc.Function.Name, openAIArgsToInput(tc.Function.Arguments)))
+		}
 		if len(blocks) == 0 {
 			// Preserve the legacy shape: an empty/absent content still yields one
 			// (empty) text block so message count and Text() are unchanged.
@@ -157,16 +195,142 @@ func ParseOpenAIRequest(in OpenAIChatInbound) UnifiedRequest {
 	return uni
 }
 
+// openAIArgsToInput converts an OpenAI tool_call function.arguments value (which
+// the API encodes as a JSON *string* containing JSON) into a canonical tool_use
+// input (a JSON *object*). If args is already a JSON object/value (some clients
+// send it unquoted) it is passed through; an empty/blank value becomes {}.
+func openAIArgsToInput(args json.RawMessage) json.RawMessage {
+	s := strings.TrimSpace(string(args))
+	if s == "" || s == "null" || s == `""` {
+		return json.RawMessage(`{}`)
+	}
+	// If it's a JSON string, unquote it to recover the inner JSON object.
+	var inner string
+	if err := json.Unmarshal(args, &inner); err == nil {
+		if strings.TrimSpace(inner) == "" {
+			return json.RawMessage(`{}`)
+		}
+		return json.RawMessage(inner)
+	}
+	// Already a JSON object/array/value.
+	return args
+}
+
+// openAIToolResultContent normalizes an OpenAI tool message's content (a string,
+// or occasionally a parts array) into the canonical tool_result content (raw
+// JSON). A plain string is kept as a JSON string.
+func openAIToolResultContent(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage(`""`)
+	}
+	return raw
+}
+
+// openAIToolsToCanonical converts an OpenAI tools array
+// ([{type:"function",function:{name,description,parameters}}]) into the canonical
+// Anthropic-shaped tools array ([{name,description,input_schema}]). Returns nil
+// when there are no tools.
+func openAIToolsToCanonical(raw json.RawMessage) json.RawMessage {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	var tools []struct {
+		Function struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(raw, &tools); err != nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		schema := t.Function.Parameters
+		if len(strings.TrimSpace(string(schema))) == 0 {
+			schema = json.RawMessage(`{"type":"object"}`)
+		}
+		out = append(out, map[string]any{
+			"name":         t.Function.Name,
+			"description":  t.Function.Description,
+			"input_schema": schema,
+		})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// openAIToolChoiceToCanonical maps an OpenAI tool_choice to the Anthropic
+// tool_choice shape. "auto"/"none"/"required" strings map to {type:...}; an
+// object {type:"function",function:{name}} maps to {type:"tool",name}. Unknown
+// shapes return nil (omit).
+func openAIToolChoiceToCanonical(raw json.RawMessage) json.RawMessage {
+	s := strings.TrimSpace(string(raw))
+	if s == "" {
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		switch str {
+		case "auto":
+			return json.RawMessage(`{"type":"auto"}`)
+		case "none":
+			return json.RawMessage(`{"type":"none"}`)
+		case "required":
+			return json.RawMessage(`{"type":"any"}`)
+		default:
+			return nil
+		}
+	}
+	var obj struct {
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil && obj.Function.Name != "" {
+		b, _ := json.Marshal(map[string]any{"type": "tool", "name": obj.Function.Name})
+		return b
+	}
+	return nil
+}
+
 // BuildOpenAIResponse converts a UnifiedResponse into an inbound OpenAI Chat
 // Completions response body (id/created are filled by the relay).
 func BuildOpenAIResponse(r UnifiedResponse) map[string]any {
+	message := map[string]any{"role": RoleAssistant, "content": r.Text()}
+	// Surface any tool_use blocks as OpenAI tool_calls so a tool-using upstream
+	// response reaches an OpenAI client intact (not flattened to empty text).
+	var toolCalls []map[string]any
+	for _, c := range r.Content {
+		if !c.IsToolUse() {
+			continue
+		}
+		toolCalls = append(toolCalls, map[string]any{
+			"id":   c.ToolUse.ID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      c.ToolUse.Name,
+				"arguments": inputToOpenAIArgs(c.ToolUse.Input),
+			},
+		})
+	}
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+		// OpenAI sends content:null when the turn is purely tool calls.
+		if r.Text() == "" {
+			message["content"] = nil
+		}
+	}
 	return map[string]any{
 		"object": "chat.completion",
 		"model":  r.Model,
 		"choices": []map[string]any{
 			{
 				"index":         0,
-				"message":       map[string]any{"role": RoleAssistant, "content": r.Text()},
+				"message":       message,
 				"finish_reason": stopToOpenAIFinish(r.StopReason),
 			},
 		},
@@ -182,12 +346,25 @@ func BuildOpenAIResponse(r UnifiedResponse) map[string]any {
 // SSE chunk object (the value that follows "data: "). Returns nil for the [DONE]
 // sentinel so the caller can emit the literal "data: [DONE]" instead.
 func BuildOpenAIStreamChunk(model string, c StreamChunk) map[string]any {
-	if c.Done && c.Delta == "" && c.StopReason == StopUnknown && c.Usage == nil {
+	if c.Done && c.Delta == "" && c.StopReason == StopUnknown && c.Usage == nil && c.ToolCallDelta == nil {
 		return nil
 	}
 	delta := map[string]any{}
 	if c.Delta != "" {
 		delta["content"] = c.Delta
+	}
+	if tc := c.ToolCallDelta; tc != nil {
+		fn := map[string]any{}
+		if tc.Name != "" {
+			fn["name"] = tc.Name
+		}
+		// arguments is always present (possibly "") on a tool_calls delta.
+		fn["arguments"] = tc.ArgsFragment
+		call := map[string]any{"index": tc.Index, "type": "function", "function": fn}
+		if tc.ID != "" {
+			call["id"] = tc.ID
+		}
+		delta["tool_calls"] = []map[string]any{call}
 	}
 	choice := map[string]any{"index": 0, "delta": delta}
 	if c.StopReason != StopUnknown {
@@ -514,12 +691,36 @@ func BuildAnthropicStreamEvent(c StreamChunk) (event string, payload map[string]
 // concatenates the unified text blocks) — the MVP renders assistant output as a
 // single text content block, matching the rest of the platform's text-only path.
 func BuildBedrockResponse(r UnifiedResponse) map[string]any {
-	text := r.Text()
+	content := make([]map[string]any, 0, len(r.Content)+1)
+	// Preserve the existing contract of a single joined text block (r.Text()
+	// concatenates all text blocks), then append any toolUse blocks.
+	if text := r.Text(); text != "" {
+		content = append(content, map[string]any{"text": text})
+	}
+	for _, c := range r.Content {
+		if !c.IsToolUse() {
+			continue
+		}
+		input := json.RawMessage(c.ToolUse.Input)
+		if strings.TrimSpace(string(input)) == "" {
+			input = json.RawMessage(`{}`)
+		}
+		content = append(content, map[string]any{
+			"toolUse": map[string]any{
+				"toolUseId": c.ToolUse.ID,
+				"name":      c.ToolUse.Name,
+				"input":     input,
+			},
+		})
+	}
+	if len(content) == 0 {
+		content = append(content, map[string]any{"text": ""})
+	}
 	return map[string]any{
 		"output": map[string]any{
 			"message": map[string]any{
 				"role":    RoleAssistant,
-				"content": []map[string]any{{"text": text}},
+				"content": content,
 			},
 		},
 		"stopReason": stopToBedrock(r.StopReason),
@@ -534,7 +735,7 @@ func BuildBedrockResponse(r UnifiedResponse) map[string]any {
 // Bedrock ConverseStream event-type discriminators (the :event-type header
 // value the relay stamps via EncodeBedrockFrame).
 const (
-	BedrockEventMessageStart     = "messageStart"
+	BedrockEventMessageStart      = "messageStart"
 	BedrockEventContentBlockDelta = "contentBlockDelta"
 	BedrockEventContentBlockStop  = "contentBlockStop"
 	BedrockEventMessageStop       = "messageStop"
@@ -628,6 +829,23 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 				blocks = append(blocks, bedrockContentBlock{Image: img})
 				continue
 			}
+			if c.IsToolUse() {
+				input := json.RawMessage(c.ToolUse.Input)
+				if strings.TrimSpace(string(input)) == "" {
+					input = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, bedrockContentBlock{ToolUse: &bedrockToolUseBlock{
+					ToolUseID: c.ToolUse.ID, Name: c.ToolUse.Name, Input: input,
+				}})
+				continue
+			}
+			if c.IsToolResult() {
+				blocks = append(blocks, bedrockContentBlock{ToolResult: &bedrockToolResultBlock{
+					ToolUseID: c.ToolResult.ToolUseID,
+					Content:   bedrockToolResultContent(c.ToolResult.Content),
+				}})
+				continue
+			}
 			// Text block: skip empties. Bedrock rejects {text:""}, and an empty
 			// text block carries no information anyway.
 			if c.Text == "" {
@@ -650,7 +868,87 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 			StopSequences: uni.StopSequences,
 		}
 	}
+	out.ToolConfig = canonicalToolsToBedrock(uni.Tools, uni.ToolChoice)
 	return out, nil
+}
+
+// bedrockToolResultContent renders a canonical tool_result content (raw JSON)
+// into Bedrock's toolResult.content list. A JSON object/array becomes a {json:…}
+// sub-block; a JSON string (or anything else) becomes a {text:…} sub-block —
+// matching Converse's accepted toolResult content shapes.
+func bedrockToolResultContent(raw json.RawMessage) []map[string]any {
+	s := strings.TrimSpace(string(raw))
+	if s == "" {
+		return []map[string]any{{"text": ""}}
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		return []map[string]any{{"text": str}}
+	}
+	if s[0] == '{' || s[0] == '[' {
+		return []map[string]any{{"json": json.RawMessage(raw)}}
+	}
+	return []map[string]any{{"text": s}}
+}
+
+// canonicalToolsToBedrock converts the canonical (Anthropic-shaped) tools array
+// and tool_choice into a Bedrock toolConfig. Returns nil when there are no tools.
+func canonicalToolsToBedrock(toolsRaw, choiceRaw json.RawMessage) *bedrockToolConfig {
+	if len(strings.TrimSpace(string(toolsRaw))) == 0 {
+		return nil
+	}
+	var tools []struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"input_schema"`
+	}
+	if err := json.Unmarshal(toolsRaw, &tools); err != nil {
+		return nil
+	}
+	cfg := &bedrockToolConfig{}
+	for _, t := range tools {
+		var schema map[string]any
+		if len(strings.TrimSpace(string(t.InputSchema))) > 0 {
+			_ = json.Unmarshal(t.InputSchema, &schema)
+		}
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		}
+		cfg.Tools = append(cfg.Tools, bedrockTool{ToolSpec: bedrockToolSpec{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: map[string]any{"json": schema},
+		}})
+	}
+	cfg.ToolChoice = canonicalToolChoiceToBedrock(choiceRaw)
+	return cfg
+}
+
+// canonicalToolChoiceToBedrock maps the canonical tool_choice to Bedrock's
+// toolChoice ({auto:{}} | {any:{}} | {tool:{name}}). {type:none} has no Bedrock
+// equivalent (Bedrock has no "none") → nil (omit). nil/unknown → nil.
+func canonicalToolChoiceToBedrock(raw json.RawMessage) map[string]any {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	var c struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil
+	}
+	switch c.Type {
+	case "auto":
+		return map[string]any{"auto": map[string]any{}}
+	case "any":
+		return map[string]any{"any": map[string]any{}}
+	case "tool":
+		if c.Name != "" {
+			return map[string]any{"tool": map[string]any{"name": c.Name}}
+		}
+	}
+	return nil
 }
 
 // bedrockImageFromSource materializes a unified image block into a Converse image
@@ -707,7 +1005,10 @@ func bedrockImageFromSource(ctx context.Context, src *ImageSource) (*bedrockImag
 func bedrockToUnifiedResponse(r bedrockConverseResponse) UnifiedResponse {
 	out := UnifiedResponse{StopReason: bedrockStopToUnified(r.StopReason)}
 	for _, c := range r.Output.Message.Content {
-		if c.Text != "" {
+		switch {
+		case c.ToolUse != nil:
+			out.Content = append(out.Content, ToolUseBlockOf(c.ToolUse.ToolUseID, c.ToolUse.Name, c.ToolUse.Input))
+		case c.Text != "":
 			out.Content = append(out.Content, TextBlock(c.Text))
 		}
 	}
