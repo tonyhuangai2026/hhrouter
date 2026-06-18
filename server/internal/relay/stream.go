@@ -405,12 +405,14 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 		}
 		if chunk.Delta != "" {
 			completion.WriteString(chunk.Delta)
-			// Capture the first non-empty delta's arrival as the TTFT anchor
-			// (first-only; later deltas do not move it).
-			if firstTokenAt == nil {
-				now := time.Now()
-				firstTokenAt = &now
-			}
+		}
+		// Capture the first meaningful output — a text delta OR a tool-call delta —
+		// as the TTFT anchor (first-only; later deltas do not move it). Tool-call
+		// streams carry NO text deltas, so anchoring on text alone left TTFT nil and
+		// the UI fell back to the (meaningless) total latency for tool-call rows.
+		if firstTokenAt == nil && (chunk.Delta != "" || chunk.ToolCallDelta != nil) {
+			now := time.Now()
+			firstTokenAt = &now
 		}
 		// Track the last non-unknown stop reason so the Bedrock terminal
 		// messageStop frame carries the right value (Bedrock emits stop in a

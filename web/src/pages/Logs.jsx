@@ -311,14 +311,20 @@ export default function Logs() {
       {
         title: t('columns.time'),
         dataIndex: 'created_at',
-        width: 130,
+        width: 140,
         render: (v, r) => {
           const ts = v ?? r.createdAt;
           if (ts == null) return '-';
           const d = new Date(ts);
           if (Number.isNaN(d.getTime())) return String(ts);
           const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-          const clock = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+          // Show seconds — request timing to the second was requested for debugging
+          // bursty/tool-call traffic where multiple requests share the same minute.
+          const clock = d.toLocaleTimeString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          });
           return (
             <div>
               <div className="lg-time-date">{date}</div>
