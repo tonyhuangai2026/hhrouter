@@ -118,7 +118,23 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 	// event-stream binary framing for bedrock.
 	setStreamHeaders(c, rc.outFormat)
 
-	usage, completionText, firstToken, streamErr := r.pumpStream(c, rc, ad, resp, start)
+	// When the upstream speaks Anthropic AND the client wants Anthropic output, we
+	// forward the SSE events verbatim (pumpAnthropicPassthrough). This preserves
+	// the full multi-block framing — including tool_use blocks and input_json_delta
+	// argument streaming — that the reshaping pumpStream path collapses to a single
+	// text block (which is why tool calls hung). All other format combinations use
+	// the transform pump.
+	var (
+		usage          *adapter.Usage
+		completionText string
+		firstToken     *time.Duration
+		streamErr      error
+	)
+	if ad.Name() == "anthropic" && rc.outFormat == OutAnthropic {
+		usage, completionText, firstToken, streamErr = r.pumpAnthropicPassthrough(c, resp, start)
+	} else {
+		usage, completionText, firstToken, streamErr = r.pumpStream(c, rc, ad, resp, start)
+	}
 
 	prompt, completion, total := finalizeUsage(usage, completionText, estPrompt)
 	status := model.LogSuccess
@@ -152,6 +168,150 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 	}
 	r.finish(rc, lastAtt, sel.Rule, status, httpStatus, errMsg, prompt, completion, total, true, time.Since(start), firstToken, bill)
 }
+
+// anthropicPassthroughEvent is a minimal view of an Anthropic streaming event,
+// used by the passthrough pump to sniff usage / stop_reason / text for billing
+// and logging WITHOUT reshaping the event (the bytes are forwarded verbatim).
+type anthropicPassthroughEvent struct {
+	Type    string `json:"type"`
+	Message *struct {
+		Usage *struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	} `json:"message"`
+	Delta *struct {
+		Type       string `json:"type"`
+		Text       string `json:"text"`
+		StopReason string `json:"stop_reason"`
+	} `json:"delta"`
+	Usage *struct {
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// pumpAnthropicPassthrough forwards an Anthropic upstream SSE stream to an
+// Anthropic-output client byte-for-byte, reconstructing the `event:` name from
+// each payload's self-describing `type` field. Unlike pumpStream it does NOT
+// reshape events into a single text block, so multi-block tool-call streams
+// (tool_use + input_json_delta across several indices) round-trip intact — the
+// fix for tool calling hanging. It still sniffs usage, stop_reason, text and
+// mid-stream error events so billing, TTFT and request logging behave the same.
+//
+// Used only when BOTH the upstream and the output format are Anthropic. All
+// other combinations keep using pumpStream's transform path.
+func (r *Relayer) pumpAnthropicPassthrough(c *gin.Context, resp *http.Response, streamStart time.Time) (*adapter.Usage, string, *time.Duration, error) {
+	events, errCh := upstreamEvents("anthropic", resp.Body)
+
+	var (
+		finalUsage   *adapter.Usage
+		completion   bytes.Buffer
+		fatalErr     error
+		clientGone   bool
+		firstTokenAt *time.Time
+	)
+
+	process := func(raw streamEvent) {
+		payload := raw.Payload
+		var ev anthropicPassthroughEvent
+		// A malformed payload is still forwarded verbatim (the client can cope);
+		// we just cannot sniff it.
+		_ = json.Unmarshal(payload, &ev)
+
+		if ev.Type == "error" {
+			msg := "anthropic upstream stream error"
+			if ev.Error != nil && ev.Error.Message != "" {
+				msg = ev.Error.Message
+			}
+			fatalErr = &adapter.UpstreamError{Provider: "anthropic", StatusCode: http.StatusBadGateway, Message: msg}
+			// Still forward the error event so the client sees it.
+			writeSSENamedRaw(c, eventNameFor(ev.Type, payload), payload)
+			return
+		}
+
+		// Sniff usage from message_start (input + cache) and message_delta (output).
+		if ev.Message != nil && ev.Message.Usage != nil {
+			u := adapter.Usage{
+				PromptTokens:     ev.Message.Usage.InputTokens,
+				CacheReadTokens:  ev.Message.Usage.CacheReadInputTokens,
+				CacheWriteTokens: ev.Message.Usage.CacheCreationInputTokens,
+				HasUpstream:      true,
+			}
+			finalUsage = mergeStreamUsage(finalUsage, u)
+		}
+		if ev.Usage != nil {
+			finalUsage = mergeStreamUsage(finalUsage, adapter.Usage{CompletionTokens: ev.Usage.OutputTokens, HasUpstream: true})
+		}
+		// Sniff text deltas for the TTFT anchor + completion-text fallback.
+		if ev.Delta != nil && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+			completion.WriteString(ev.Delta.Text)
+			if firstTokenAt == nil {
+				now := time.Now()
+				firstTokenAt = &now
+			}
+		}
+		// An input_json_delta (tool arguments) also counts as first token activity.
+		if ev.Delta != nil && ev.Delta.Type == "input_json_delta" && firstTokenAt == nil {
+			now := time.Now()
+			firstTokenAt = &now
+		}
+
+		// Forward the event verbatim.
+		writeSSENamedRaw(c, eventNameFor(ev.Type, payload), payload)
+	}
+
+	readTerminalErr := func() {
+		if err := <-errCh; err != nil && !errors.Is(err, io.EOF) {
+			fatalErr = err
+		}
+	}
+
+	c.Stream(func(w io.Writer) bool {
+		if clientGone || fatalErr != nil {
+			return false
+		}
+		select {
+		case raw, ok := <-events:
+			if !ok {
+				readTerminalErr()
+				return false
+			}
+			process(raw)
+			return true
+		default:
+		}
+		select {
+		case <-c.Request.Context().Done():
+			clientGone = true
+			return false
+		case raw, ok := <-events:
+			if !ok {
+				readTerminalErr()
+				return false
+			}
+			process(raw)
+			return true
+		}
+	})
+
+	var firstToken *time.Duration
+	if firstTokenAt != nil {
+		d := firstTokenAt.Sub(streamStart)
+		firstToken = &d
+	}
+	return finalUsage, completion.String(), firstToken, fatalErr
+}
+
+// eventNameFor returns the SSE `event:` name for an Anthropic payload. It prefers
+// the payload's self-describing `type` field (so it matches the upstream exactly)
+// and falls back to empty (no event line) only when type is absent.
+func eventNameFor(typ string, _ []byte) string { return typ }
 
 // pumpStream reads the upstream stream, converts each event to the inbound
 // format, writes it via gin's c.Stream, and accumulates usage. It returns the
@@ -488,6 +648,17 @@ func writeSSENamed(c *gin.Context, event string, payload any) {
 		return
 	}
 	_, _ = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, b)
+	c.Writer.Flush()
+}
+
+// writeSSENamedRaw writes a named SSE event with a pre-serialized JSON payload,
+// preserving the upstream bytes exactly (used by the Anthropic passthrough so
+// tool_use blocks and partial_json deltas round-trip losslessly).
+func writeSSENamedRaw(c *gin.Context, event string, payload []byte) {
+	if event != "" {
+		_, _ = fmt.Fprintf(c.Writer, "event: %s\n", event)
+	}
+	_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", payload)
 	c.Writer.Flush()
 }
 

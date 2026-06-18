@@ -48,14 +48,19 @@ func (a *AnthropicAdapter) Name() string { return "anthropic" }
 
 // anthropicOutboundRequest is the request body sent to {base_url}/v1/messages.
 type anthropicOutboundRequest struct {
-	Model         string                   `json:"model"`
-	MaxTokens     int                      `json:"max_tokens"`
-	System        string                   `json:"system,omitempty"`
-	Messages      []anthropicOutboundMsg   `json:"messages"`
-	Stream        bool                     `json:"stream,omitempty"`
-	Temperature   *float64                 `json:"temperature,omitempty"`
-	TopP          *float64                 `json:"top_p,omitempty"`
-	StopSequences []string                 `json:"stop_sequences,omitempty"`
+	Model         string                 `json:"model"`
+	MaxTokens     int                    `json:"max_tokens"`
+	System        string                 `json:"system,omitempty"`
+	Messages      []anthropicOutboundMsg `json:"messages"`
+	Stream        bool                   `json:"stream,omitempty"`
+	Temperature   *float64               `json:"temperature,omitempty"`
+	TopP          *float64               `json:"top_p,omitempty"`
+	StopSequences []string               `json:"stop_sequences,omitempty"`
+	// Tools / ToolChoice are forwarded verbatim from the inbound request so the
+	// upstream sees the full tool definitions. omitempty keeps them off the wire
+	// for non-tool requests (byte-identical to the pre-tool body).
+	Tools      json.RawMessage `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 }
 
 type anthropicOutboundMsg struct {
@@ -82,6 +87,10 @@ type anthropicMessageResponse struct {
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
+		// tool_use blocks in the assistant response.
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
 	} `json:"content"`
 	StopReason string          `json:"stop_reason"`
 	Usage      *anthropicUsage `json:"usage"`
@@ -155,6 +164,8 @@ func (a *AnthropicAdapter) BuildRequest(ctx context.Context, uni UnifiedRequest,
 		Temperature:   uni.Temperature,
 		TopP:          uni.TopP,
 		StopSequences: uni.StopSequences,
+		Tools:         uni.Tools,
+		ToolChoice:    uni.ToolChoice,
 	}
 
 	raw, err := json.Marshal(body)
@@ -210,8 +221,13 @@ func (a *AnthropicAdapter) ParseResponse(resp *http.Response) (UnifiedResponse, 
 
 	out := UnifiedResponse{Model: parsed.Model, StopReason: anthropicStopToUnified(parsed.StopReason)}
 	for _, c := range parsed.Content {
-		if c.Type == "text" && c.Text != "" {
-			out.Content = append(out.Content, TextBlock(c.Text))
+		switch c.Type {
+		case "text":
+			if c.Text != "" {
+				out.Content = append(out.Content, TextBlock(c.Text))
+			}
+		case "tool_use":
+			out.Content = append(out.Content, ToolUseBlockOf(c.ID, c.Name, c.Input))
 		}
 	}
 

@@ -23,6 +23,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/agent-router/server/internal/model"
@@ -61,10 +62,14 @@ const (
 )
 
 // Block type constants for ContentBlock.Type. Text is the original/default kind;
-// Image was added to carry multimodal image parts through the unified layer.
+// Image was added to carry multimodal image parts through the unified layer;
+// ToolUse / ToolResult carry tool-calling turns (assistant requests a tool,
+// user returns its result) so agent clients (Claude Code, Cursor, …) work.
 const (
-	BlockText  = "text"
-	BlockImage = "image"
+	BlockText       = "text"
+	BlockImage      = "image"
+	BlockToolUse    = "tool_use"
+	BlockToolResult = "tool_result"
 )
 
 // ImageKind enumerates how an image's bytes are referenced in the unified layer.
@@ -88,9 +93,36 @@ const (
 // helpers (Message.Text / UnifiedResponse.Text) and any text-only upstream path
 // behave exactly as before — image blocks contribute no text.
 type ContentBlock struct {
-	Type  string       `json:"type"`            // "text" | "image"
+	Type  string       `json:"type"`            // "text" | "image" | "tool_use" | "tool_result"
 	Text  string       `json:"text,omitempty"`  // when Type=="text"
 	Image *ImageSource `json:"image,omitempty"` // when Type=="image"
+
+	// ToolUse is set when Type=="tool_use": an assistant turn asking to invoke a
+	// tool. ToolResult is set when Type=="tool_result": a user turn returning a
+	// tool's output, referenced back by ToolUseID. Both are nil otherwise so the
+	// text-flattening helpers and text-only upstream paths are unaffected.
+	ToolUse    *ToolUseBlock    `json:"tool_use,omitempty"`
+	ToolResult *ToolResultBlock `json:"tool_result,omitempty"`
+}
+
+// ToolUseBlock is a model's request to call a tool. ID is the provider-assigned
+// call id (echoed back by the matching tool_result); Name is the tool name;
+// Input is the raw JSON arguments object (kept verbatim so no precision is lost
+// round-tripping through the gateway).
+type ToolUseBlock struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// ToolResultBlock is the result of a tool call, supplied by the client on the
+// next turn. ToolUseID references the originating ToolUseBlock.ID. Content is the
+// raw JSON of the result (a string or an array of blocks, per the Anthropic
+// contract) kept verbatim. IsError marks a tool-execution error.
+type ToolResultBlock struct {
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 // ImageSource describes the bytes of an image content block. Exactly one of the
@@ -122,8 +154,24 @@ func ImageBase64Block(mediaType, data string) ContentBlock {
 	return ContentBlock{Type: BlockImage, Image: &ImageSource{Kind: ImageKindBase64, MediaType: mediaType, Data: data}}
 }
 
+// ToolUseBlockOf constructs a tool_use ContentBlock.
+func ToolUseBlockOf(id, name string, input json.RawMessage) ContentBlock {
+	return ContentBlock{Type: BlockToolUse, ToolUse: &ToolUseBlock{ID: id, Name: name, Input: input}}
+}
+
+// ToolResultBlockOf constructs a tool_result ContentBlock.
+func ToolResultBlockOf(toolUseID string, content json.RawMessage, isError bool) ContentBlock {
+	return ContentBlock{Type: BlockToolResult, ToolResult: &ToolResultBlock{ToolUseID: toolUseID, Content: content, IsError: isError}}
+}
+
 // IsImage reports whether the block is an image block with a populated source.
 func (c ContentBlock) IsImage() bool { return c.Type == BlockImage && c.Image != nil }
+
+// IsToolUse reports whether the block is a populated tool_use block.
+func (c ContentBlock) IsToolUse() bool { return c.Type == BlockToolUse && c.ToolUse != nil }
+
+// IsToolResult reports whether the block is a populated tool_result block.
+func (c ContentBlock) IsToolResult() bool { return c.Type == BlockToolResult && c.ToolResult != nil }
 
 // HasImages reports whether any block in the message is an image block. The
 // adapters use this to decide between emitting a plain string content (text-only,
@@ -181,6 +229,14 @@ type UnifiedRequest struct {
 	Temperature   *float64 `json:"temperature,omitempty"`
 	TopP          *float64 `json:"top_p,omitempty"`
 	StopSequences []string `json:"stop_sequences,omitempty"`
+
+	// Tools is the verbatim JSON of the inbound tool definitions (the Anthropic
+	// `tools` array: each {name, description, input_schema}). It is kept as raw
+	// JSON and forwarded unchanged to an Anthropic upstream so no schema detail is
+	// lost. Nil when the caller defined no tools. ToolChoice is the verbatim
+	// `tool_choice` directive (e.g. {"type":"auto"}), nil when unset.
+	Tools      json.RawMessage `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 }
 
 // UnifiedResponse is the provider-agnostic representation of a (non-streaming)

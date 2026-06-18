@@ -224,6 +224,10 @@ type AnthropicInbound struct {
 	Temperature   *float64           `json:"temperature,omitempty"`
 	TopP          *float64           `json:"top_p,omitempty"`
 	StopSequences []string           `json:"stop_sequences,omitempty"`
+	// Tools / ToolChoice are kept as raw JSON and forwarded verbatim so the full
+	// tool definitions (name, description, input_schema) survive the gateway.
+	Tools      json.RawMessage `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 }
 
 // AnthropicMessage is one inbound message; Content is a string or block array.
@@ -244,6 +248,14 @@ type anthropicInboundBlock struct {
 		Data      string `json:"data"`
 		URL       string `json:"url"`
 	} `json:"source"`
+	// tool_use block fields (assistant requesting a tool call).
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+	// tool_result block fields (user returning a tool's output).
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
 // anthropicContentToBlocks flattens Anthropic content (string or block array)
@@ -279,6 +291,12 @@ func anthropicContentToBlocks(raw json.RawMessage) []ContentBlock {
 					out = append(out, ImageBase64Block(b.Source.MediaType, b.Source.Data))
 				}
 			}
+		case "tool_use":
+			// An assistant tool-call request. Keep id/name/input verbatim.
+			out = append(out, ToolUseBlockOf(b.ID, b.Name, b.Input))
+		case "tool_result":
+			// A user-supplied tool result referencing a prior tool_use by id.
+			out = append(out, ToolResultBlockOf(b.ToolUseID, b.Content, b.IsError))
 		case "text", "":
 			if b.Text != "" {
 				out = append(out, TextBlock(b.Text))
@@ -328,6 +346,8 @@ func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
 		Temperature:   in.Temperature,
 		TopP:          in.TopP,
 		StopSequences: in.StopSequences,
+		Tools:         in.Tools,
+		ToolChoice:    in.ToolChoice,
 	}
 	// Anthropic's contract carries system in the top-level `system` field, but some
 	// clients (e.g. Claude Code) also slip a role="system" entry into messages.
@@ -361,6 +381,33 @@ func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
 // path when the upstream speaks Anthropic Messages). ok=false for an image block
 // with no usable source.
 func BuildAnthropicContentBlock(c ContentBlock) (block map[string]any, ok bool) {
+	if c.IsToolUse() {
+		// Anthropic requires input to be a JSON object; default to {} when absent
+		// so the upstream does not reject a null/empty input.
+		input := json.RawMessage(c.ToolUse.Input)
+		if strings.TrimSpace(string(input)) == "" {
+			input = json.RawMessage(`{}`)
+		}
+		return map[string]any{
+			"type":  "tool_use",
+			"id":    c.ToolUse.ID,
+			"name":  c.ToolUse.Name,
+			"input": input,
+		}, true
+	}
+	if c.IsToolResult() {
+		b := map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": c.ToolResult.ToolUseID,
+		}
+		if strings.TrimSpace(string(c.ToolResult.Content)) != "" {
+			b["content"] = json.RawMessage(c.ToolResult.Content)
+		}
+		if c.ToolResult.IsError {
+			b["is_error"] = true
+		}
+		return b, true
+	}
 	if c.IsImage() {
 		switch c.Image.Kind {
 		case ImageKindBase64:
@@ -407,7 +454,11 @@ func BuildAnthropicContentBlocks(content []ContentBlock) []map[string]any {
 func BuildAnthropicResponse(r UnifiedResponse) map[string]any {
 	content := make([]map[string]any, 0, len(r.Content))
 	for _, c := range r.Content {
-		content = append(content, map[string]any{"type": "text", "text": c.Text})
+		// Reuse the block builder so tool_use blocks (and images) round-trip,
+		// not just text.
+		if block, ok := BuildAnthropicContentBlock(c); ok {
+			content = append(content, block)
+		}
 	}
 	if len(content) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": ""})
