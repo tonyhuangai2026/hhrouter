@@ -329,9 +329,26 @@ func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
 		TopP:          in.TopP,
 		StopSequences: in.StopSequences,
 	}
+	// Anthropic's contract carries system in the top-level `system` field, but some
+	// clients (e.g. Claude Code) also slip a role="system" entry into messages.
+	// Upstreams reject any messages[].role that is not user/assistant, so hoist
+	// those out into System (mirroring the OpenAI inbound path) rather than
+	// forwarding them verbatim.
+	var systems []string
+	if s := strings.TrimSpace(uni.System); s != "" {
+		systems = append(systems, s)
+	}
 	for _, m := range in.Messages {
+		if m.Role == RoleSystem {
+			// System is text-only; reuse the string/block-array flattener.
+			if text := strings.TrimSpace(anthropicSystemToText(m.Content)); text != "" {
+				systems = append(systems, text)
+			}
+			continue
+		}
 		uni.Messages = append(uni.Messages, Message{Role: m.Role, Content: anthropicContentToBlocks(m.Content)})
 	}
+	uni.System = strings.Join(systems, "\n")
 	return uni
 }
 

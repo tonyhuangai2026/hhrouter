@@ -102,6 +102,37 @@ func TestParseAnthropicRequest_StringSystem(t *testing.T) {
 	}
 }
 
+// Some clients (e.g. Claude Code) put a role="system" entry inside messages in
+// addition to (or instead of) the top-level system field. Upstreams reject any
+// messages[].role that is not user/assistant, so such entries must be hoisted
+// into System rather than forwarded verbatim.
+func TestParseAnthropicRequest_SystemRoleInMessagesHoisted(t *testing.T) {
+	in := AnthropicInbound{
+		Model:  "claude-opus-4-8",
+		System: json.RawMessage(`"top system"`),
+		Messages: []AnthropicMessage{
+			{Role: RoleUser, Content: json.RawMessage(`"hi"`)},
+			{Role: RoleSystem, Content: json.RawMessage(`"You are Claude Code"`)},
+		},
+	}
+	uni := ParseAnthropicRequest(in)
+
+	if uni.System != "top system\nYou are Claude Code" {
+		t.Errorf("system = %q, want merged top + hoisted", uni.System)
+	}
+	if len(uni.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1 (system stripped)", len(uni.Messages))
+	}
+	for _, m := range uni.Messages {
+		if m.Role == RoleSystem {
+			t.Errorf("system role leaked into messages: %+v", m)
+		}
+	}
+	if uni.Messages[0].Role != RoleUser {
+		t.Errorf("remaining message role = %q, want user", uni.Messages[0].Role)
+	}
+}
+
 func TestBuildAnthropicResponse_MultiBlockAndStop(t *testing.T) {
 	r := UnifiedResponse{
 		Model:      "claude",
