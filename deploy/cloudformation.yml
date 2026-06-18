@@ -252,6 +252,18 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
+  # ----- Bootstrap completion signal (credential-free, presigned S3 URL) -----
+  WaitHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+  WaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    DependsOn: AppInstance
+    Properties:
+      Handle: !Ref WaitHandle
+      Timeout: "1200"
+      Count: 1
+
   # ----- EC2 instance -----
   AppInstance:
     Type: AWS::EC2::Instance
@@ -328,15 +340,17 @@ Resources:
           BUILD_RC=0
           docker compose --env-file .env up -d --build || BUILD_RC=$?
 
-          # Signal CloudFormation that bootstrap finished. aws-cfn-bootstrap ships
-          # cfn-signal; on Ubuntu 24.04 pip is externally managed, hence the flag.
-          apt-get install -y python3-pip
-          pip3 install --break-system-packages https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
-          cfn-signal -e "$BUILD_RC" --stack ${AWS::StackName} --resource AppInstance --region ${AWS::Region} || true
-
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT20M
+          # Signal CloudFormation via the WaitCondition's presigned S3 URL. This
+          # needs NO AWS credentials (the instance has no IAM role), unlike
+          # cfn-signal's CloudFormation-API path. Report success/failure + status.
+          if [ "$BUILD_RC" -eq 0 ]; then
+            STATUS=SUCCESS; REASON="stack up"
+          else
+            STATUS=FAILURE; REASON="docker compose failed (rc=$BUILD_RC); see /var/log/arp-bootstrap.log"
+          fi
+          curl -sS -X PUT -H 'Content-Type:' \
+            --data-binary "{\"Status\":\"$STATUS\",\"Reason\":\"$REASON\",\"UniqueId\":\"arp-boot\",\"Data\":\"$REASON\"}" \
+            "${WaitHandle}" || true
 
 # ---------------------------------------------------------------------------
 # Outputs
