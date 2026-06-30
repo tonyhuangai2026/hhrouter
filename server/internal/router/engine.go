@@ -18,6 +18,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math/rand"
@@ -28,6 +29,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/agent-router/server/internal/model"
+	"github.com/agent-router/server/internal/router/expr"
+	"github.com/agent-router/server/internal/router/probe"
 )
 
 // DefaultMaxRetries is the failover attempt cap when the option is unset.
@@ -53,11 +56,35 @@ var randIntn = rand.Intn
 // take effect without a restart.
 type Engine struct {
 	db *gorm.DB
+	// probe is the routing classifier used to obtain the w/t signals that custom
+	// rule expressions reference. It is invoked ON DEMAND — only when an enabled
+	// rule's expression actually references w or t — so rules that don't use the
+	// classifier incur zero extra latency. nil = no probe configured (expressions
+	// referencing w/t then evaluate with w=0,t=0).
+	probe probe.Probe
 }
 
 // NewEngine constructs an Engine backed by the given database handle.
 func NewEngine(db *gorm.DB) *Engine {
 	return &Engine{db: db}
+}
+
+// WithProbe sets the routing classifier and returns the engine (chainable).
+func (e *Engine) WithProbe(p probe.Probe) *Engine {
+	e.probe = p
+	return e
+}
+
+// RouteInput carries everything SelectChannelCtx needs, including the rendered
+// conversation prompt the probe classifies. Prompt may be empty (the probe is
+// then only invoked if a rule references w/t, and classifies the empty string).
+type RouteInput struct {
+	Group     string
+	Model     string
+	EstTokens int
+	// Prompt is the conversation context rendered to the classifier's expected
+	// single-string form (see RenderProbePrompt).
+	Prompt string
 }
 
 // Selection is the result of SelectChannel: an ordered, load-balanced list of
@@ -102,6 +129,30 @@ func (s *Selection) Next() (*model.Channel, error) {
 	return &ch, nil
 }
 
+// RenderProbePrompt renders a conversation (role/text pairs, oldest first) into
+// the single-string form the routing classifier expects — the Qwen chat-template
+// layout from the API reference: each turn wrapped as
+// "<|im_start|>{role}\n{text}<|im_end|>\n", ending with an open assistant turn
+// "<|im_start|>assistant\n" so the classifier predicts the NEXT assistant turn.
+// system text (if any) is prepended as a leading system turn.
+func RenderProbePrompt(system string, turns []struct{ Role, Text string }) string {
+	var b strings.Builder
+	if strings.TrimSpace(system) != "" {
+		b.WriteString("<|im_start|>system\n")
+		b.WriteString(system)
+		b.WriteString("<|im_end|>\n")
+	}
+	for _, t := range turns {
+		b.WriteString("<|im_start|>")
+		b.WriteString(t.Role)
+		b.WriteString("\n")
+		b.WriteString(t.Text)
+		b.WriteString("<|im_end|>\n")
+	}
+	b.WriteString("<|im_start|>assistant\n")
+	return b.String()
+}
+
 // UpstreamModel resolves the upstream model id for a channel, honouring its
 // model_mapping (external name -> upstream id). When no mapping entry exists the
 // external model name is used unchanged.
@@ -113,20 +164,64 @@ func UpstreamModel(ch *model.Channel, externalModel string) string {
 	return externalModel
 }
 
-// SelectChannel runs the four-step pipeline and returns a Selection. group is
-// the routing group from the caller's token, model is the requested model name
-// and estTokens is the estimated prompt-token count used for the [min,max]
-// dimension. It returns ErrNoCandidate when nothing can serve the request.
+// SelectChannel runs the pipeline with no probe context (no custom-expression
+// w/t signals). Retained for callers/tests that don't supply a prompt; rules
+// whose expressions reference w/t will see w=0,t=0. Prefer SelectChannelCtx.
 func (e *Engine) SelectChannel(group, requestedModel string, estTokens int) (*Selection, error) {
+	return e.SelectChannelCtx(context.Background(), RouteInput{
+		Group: group, Model: requestedModel, EstTokens: estTokens,
+	})
+}
+
+// SelectChannelCtx runs the four-step pipeline and returns a Selection. It adds
+// custom-expression matching: each enabled rule may carry an Expr evaluated on
+// top of its Match predicate. If any enabled rule's expression references the
+// probe signals (w/t), the probe is invoked ONCE (on demand) and the result is
+// fed into every expression's evaluation. Rules with no w/t reference never
+// trigger the probe. Returns ErrNoCandidate when nothing can serve the request.
+func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selection, error) {
 	// (1) Match.
 	rules, err := e.enabledRulesByPriority()
 	if err != nil {
 		return nil, err
 	}
-	matched := matchRule(rules, group, requestedModel, estTokens)
+
+	// Compile each rule's expression once; collect whether any needs the probe.
+	progs := make([]*expr.Program, len(rules))
+	needProbe := false
+	for i := range rules {
+		p, cerr := expr.Compile(rules[i].Expr)
+		if cerr != nil {
+			// A stored expression failed to compile (shouldn't happen — validated on
+			// save). Treat as an always-false condition so the rule is skipped rather
+			// than crashing routing.
+			progs[i] = nil
+			continue
+		}
+		progs[i] = p
+		if p.References(expr.VarW) || p.References(expr.VarT) {
+			needProbe = true
+		}
+	}
+
+	// Invoke the probe on demand. A probe failure is non-fatal: w/t default to 0
+	// (expressions referencing them still evaluate, just with zero signals).
+	exprVars := expr.Vars{
+		Int: map[string]int{expr.VarTokens: in.EstTokens},
+		Str: map[string]string{expr.VarGroup: in.Group, expr.VarModel: in.Model},
+	}
+	if needProbe && e.probe != nil {
+		if pred, perr := e.probe.Predict(ctx, in.Prompt); perr == nil {
+			exprVars.Int[expr.VarW] = pred.W
+			exprVars.Int[expr.VarT] = pred.T
+		}
+	}
+
+	matched, matchedProg := matchRuleExpr(rules, progs, in.Group, in.Model, in.EstTokens, exprVars)
+	_ = matchedProg
 
 	// (2) Candidates.
-	candidates, err := e.candidateChannels(matched, requestedModel)
+	candidates, err := e.candidateChannels(matched, in.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -134,13 +229,12 @@ func (e *Engine) SelectChannel(group, requestedModel string, estTokens int) (*Se
 		return nil, ErrNoCandidate
 	}
 
-	// (3) LoadBalance — order the candidates: highest-priority bucket first
-	// (weighted-random ordered), then remaining buckets descending.
+	// (3) LoadBalance.
 	ordered := loadBalanceOrder(candidates)
 
 	return &Selection{
 		Rule:       matched,
-		Model:      requestedModel,
+		Model:      in.Model,
 		candidates: ordered,
 		maxRetries: e.maxRetries(),
 		cursor:     0,
@@ -170,15 +264,36 @@ func (e *Engine) maxRetries() int {
 
 // matchRule returns the first rule whose every dimension is satisfied, or nil
 // when none match (no-rule fallback). Rules are assumed already sorted by
-// ascending priority.
+// ascending priority. (No expression support — used by tests and the probe-less
+// path via matchRuleExpr with nil programs.)
 func matchRule(rules []model.RoutingRule, group, requestedModel string, estTokens int) *model.RoutingRule {
+	r, _ := matchRuleExpr(rules, make([]*expr.Program, len(rules)), group, requestedModel, estTokens, expr.Vars{})
+	return r
+}
+
+// matchRuleExpr returns the first rule whose Match predicate AND custom
+// expression both pass. progs[i] is the compiled expression for rules[i] (nil =
+// treat the expression as failing, so a rule with a broken stored expression is
+// skipped rather than matched). A nil program for a rule with an EMPTY Expr is
+// fine because expr.Compile("") yields an always-true program — callers pass
+// real compiled programs; the all-nil slice from matchRule means "no rule has an
+// expression", and an empty-Expr rule compiled to a non-nil always-true program.
+func matchRuleExpr(rules []model.RoutingRule, progs []*expr.Program, group, requestedModel string, estTokens int, vars expr.Vars) (*model.RoutingRule, *expr.Program) {
 	for i := range rules {
 		spec := decodeMatch(rules[i].Match)
-		if ruleMatches(spec, group, requestedModel, estTokens) {
-			return &rules[i]
+		if !ruleMatches(spec, group, requestedModel, estTokens) {
+			continue
 		}
+		// Expression gate: only applies when the rule actually has one.
+		if strings.TrimSpace(rules[i].Expr) != "" {
+			p := progs[i]
+			if p == nil || !p.Eval(vars) {
+				continue
+			}
+		}
+		return &rules[i], progs[i]
 	}
-	return nil
+	return nil, nil
 }
 
 // ruleMatches reports whether all dimensions of spec are satisfied. An empty

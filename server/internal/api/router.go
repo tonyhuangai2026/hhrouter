@@ -11,8 +11,10 @@ import (
 
 	"github.com/agent-router/server/internal/controller"
 	"github.com/agent-router/server/internal/middleware"
+	"github.com/agent-router/server/internal/model"
 	"github.com/agent-router/server/internal/relay"
 	"github.com/agent-router/server/internal/router"
+	"github.com/agent-router/server/internal/router/probe"
 	"github.com/agent-router/server/internal/service"
 )
 
@@ -66,6 +68,12 @@ func registerRelayRoutes(r *gin.Engine, d Deps) {
 	channelSvc := service.NewChannelService(d.DB, d.Redis, d.SecretKey)
 	logSvc := service.NewLogService(d.DB)
 	engine := router.NewEngine(d.DB)
+	// Routing classifier ("small model" probe). Mock-only for now (real SageMaker
+	// integration is deferred); the engine invokes it only when a rule expression
+	// references the w/t signals, so this adds no latency to probe-less routing.
+	if model.GetOption(d.DB, model.OptRouterProbeMock, "true") != "false" {
+		engine = engine.WithProbe(probe.NewMockProbe())
+	}
 
 	quotaSvc := d.Quota
 	if quotaSvc == nil {

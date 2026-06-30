@@ -30,6 +30,14 @@ type RoutingRule struct {
 	// TargetGroup may be used instead of TargetChannelIDs to point at a channel
 	// group (nullable).
 	TargetGroup string `gorm:"type:varchar(64)" json:"target_group,omitempty"`
+
+	// Expr is an optional custom routing expression evaluated IN ADDITION to the
+	// Match predicate (both must pass). It is a small boolean language over the
+	// request variables w, t (probe signals), tokens, group, model — e.g.
+	// `w == 1 && t > 500`. Empty = no extra condition (legacy behaviour). When an
+	// enabled rule's expression references w or t, the engine invokes the routing
+	// probe once per request to obtain them. Validated (compiled) on save.
+	Expr string `gorm:"type:text" json:"expr,omitempty"`
 }
 
 // MatchSpec is the decoded shape of RoutingRule.Match.

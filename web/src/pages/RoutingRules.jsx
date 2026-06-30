@@ -90,6 +90,7 @@ export default function RoutingRules() {
         max_tokens: m.max_tokens ?? null,
         target_channel_ids: editing.target_channel_ids || [],
         target_group: editing.target_group || '',
+        expr: editing.expr || '',
       };
     }
     return {
@@ -102,6 +103,7 @@ export default function RoutingRules() {
       max_tokens: null,
       target_channel_ids: [],
       target_group: '',
+      expr: '',
     };
   }, [editing]);
 
@@ -118,6 +120,7 @@ export default function RoutingRules() {
       match,
       target_channel_ids: values.target_channel_ids || [],
       target_group: values.target_group || null,
+      expr: (values.expr || '').trim(),
     };
   }, []);
 
@@ -181,14 +184,15 @@ export default function RoutingRules() {
     [load, page, t]
   );
 
-  const renderMatch = useCallback((match) => {
+  const renderMatch = useCallback((match, record) => {
     const m = match || {};
     const parts = [];
     if (m.groups?.length) parts.push(t('match.groups', { value: m.groups.join(', ') }));
     if (m.models?.length) parts.push(t('match.models', { value: m.models.join(', ') }));
     if (m.min_tokens != null) parts.push(t('match.min', { value: m.min_tokens }));
     if (m.max_tokens != null) parts.push(t('match.max', { value: m.max_tokens }));
-    if (!parts.length) return <Text type="tertiary">{t('match.any')}</Text>;
+    const expr = record?.expr;
+    if (!parts.length && !expr) return <Text type="tertiary">{t('match.any')}</Text>;
     return (
       <Space spacing={4} wrap>
         {parts.map((p) => (
@@ -196,6 +200,11 @@ export default function RoutingRules() {
             {p}
           </Tag>
         ))}
+        {expr ? (
+          <Tag color="orange" size="small" style={{ fontFamily: 'var(--semi-font-family-mono, monospace)' }}>
+            {expr}
+          </Tag>
+        ) : null}
       </Space>
     );
   }, [t]);
@@ -315,6 +324,17 @@ export default function RoutingRules() {
             <Form.InputNumber field="min_tokens" label={t('form.minTokens')} min={0} style={{ width: 200 }} />
             <Form.InputNumber field="max_tokens" label={t('form.maxTokens')} min={0} style={{ width: 200 }} />
           </Space>
+
+          <Form.TextArea
+            field="expr"
+            label={t('form.expr')}
+            placeholder={t('form.exprPlaceholder')}
+            autosize={{ minRows: 1, maxRows: 3 }}
+            style={{ fontFamily: 'var(--semi-font-family-mono, monospace)' }}
+          />
+          <Text type="tertiary" size="small" style={{ display: 'block', marginTop: -8, marginBottom: 4, whiteSpace: 'pre-line' }}>
+            {t('form.exprHelp')}
+          </Text>
 
           <Title heading={6} style={{ marginTop: 8 }}>
             {t('form.targetSectionTitle')}

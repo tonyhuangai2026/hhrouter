@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/agent-router/server/internal/model"
+	"github.com/agent-router/server/internal/router/expr"
 )
 
 // Rule-related sentinel errors.
@@ -40,6 +41,7 @@ type RuleInput struct {
 	Match            *model.MatchSpec
 	TargetChannelIDs *[]uint
 	TargetGroup      *string
+	Expr             *string
 }
 
 // Create validates and persists a new routing rule.
@@ -130,6 +132,15 @@ func (s *RuleService) applyInput(rule *model.RoutingRule, in RuleInput) error {
 	}
 	if in.TargetGroup != nil {
 		rule.TargetGroup = strings.TrimSpace(*in.TargetGroup)
+	}
+	if in.Expr != nil {
+		e := strings.TrimSpace(*in.Expr)
+		// Validate by compiling: a bad expression is a 400-class input error so the
+		// rule editor can surface the parser message.
+		if _, err := expr.Compile(e); err != nil {
+			return fmt.Errorf("%w: expr: %v", ErrInvalidRule, err)
+		}
+		rule.Expr = e
 	}
 	return nil
 }

@@ -203,13 +203,30 @@ func formatMicroUSD(micro int64) string {
 	return "$" + strconv.FormatFloat(float64(micro)/1e6, 'f', 4, 64)
 }
 
+// routeInput builds the engine RouteInput from the request context, rendering
+// the conversation into the classifier prompt form. The render is cheap and the
+// engine only invokes the probe when a rule's expression references w/t, so this
+// adds no upstream call for probe-less routing.
+func (r *Relayer) routeInput(rc *requestContext, estPrompt int) router.RouteInput {
+	turns := make([]struct{ Role, Text string }, 0, len(rc.uni.Messages))
+	for _, m := range rc.uni.Messages {
+		turns = append(turns, struct{ Role, Text string }{Role: m.Role, Text: m.Text()})
+	}
+	return router.RouteInput{
+		Group:     rc.token.Group,
+		Model:     rc.uni.Model,
+		EstTokens: estPrompt,
+		Prompt:    router.RenderProbePrompt(rc.uni.System, turns),
+	}
+}
+
 // serveNonStream runs the non-streaming relay: select candidates, attempt each
 // (failing over on retryable upstream errors), adapt the response back to the
 // inbound format, then log and consume quota.
 func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt int) {
 	start := time.Now()
 
-	sel, err := r.engine.SelectChannel(rc.token.Group, rc.uni.Model, estPrompt)
+	sel, err := r.engine.SelectChannelCtx(c.Request.Context(), r.routeInput(rc, estPrompt))
 	if err != nil {
 		r.failNoChannel(c, rc, err, estPrompt, false, start)
 		return

@@ -29,7 +29,7 @@ import (
 func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int) {
 	start := time.Now()
 
-	sel, err := r.engine.SelectChannel(rc.token.Group, rc.uni.Model, estPrompt)
+	sel, err := r.engine.SelectChannelCtx(c.Request.Context(), r.routeInput(rc, estPrompt))
 	if err != nil {
 		r.failNoChannel(c, rc, err, estPrompt, true, start)
 		return
@@ -321,14 +321,14 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 	events, errCh := upstreamEvents(ad.Name(), resp.Body)
 
 	var (
-		finalUsage   *adapter.Usage
-		completion   bytes.Buffer
-		anthOpened   bool
+		finalUsage    *adapter.Usage
+		completion    bytes.Buffer
+		anthOpened    bool
 		bedrockOpened bool
-		finalStop    adapter.StopReason = adapter.StopUnknown
-		fatalErr     error
-		clientGone   bool
-		firstTokenAt *time.Time // wall-clock of the first non-empty delta (TTFT anchor)
+		finalStop     adapter.StopReason = adapter.StopUnknown
+		fatalErr      error
+		clientGone    bool
+		firstTokenAt  *time.Time // wall-clock of the first non-empty delta (TTFT anchor)
 	)
 
 	// For Anthropic OUTPUT we must emit the message_start / content_block_start

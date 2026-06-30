@@ -22,6 +22,14 @@ const (
 	OptDefaultUserQuota = "DefaultUserQuota"
 	OptRegisterEnabled  = "RegisterEnabled"
 	OptSystemName       = "SystemName"
+	// OptRouterProbeMock — when "true" (default), the routing classifier is the
+	// built-in deterministic Mock (no external call). The real SageMaker endpoint
+	// integration is deferred; flipping this to "false" without a real probe wired
+	// means w/t default to 0.
+	OptRouterProbeMock = "RouterProbeMock"
+	// OptRouterProbeEndpoint — the SageMaker endpoint name for the real classifier
+	// (unused while mock is active; stored for the future real integration).
+	OptRouterProbeEndpoint = "RouterProbeEndpoint"
 )
 
 // GetOption returns the value of an option key, or def if absent.

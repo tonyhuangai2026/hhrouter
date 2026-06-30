@@ -32,6 +32,7 @@ type ruleRequest struct {
 	Match            *model.MatchSpec `json:"match"`
 	TargetChannelIDs *[]uint          `json:"target_channel_ids"`
 	TargetGroup      *string          `json:"target_group"`
+	Expr             *string          `json:"expr"`
 }
 
 // toInput converts the request into the service-layer input.
@@ -43,6 +44,7 @@ func (r *ruleRequest) toInput() service.RuleInput {
 		Match:            r.Match,
 		TargetChannelIDs: r.TargetChannelIDs,
 		TargetGroup:      r.TargetGroup,
+		Expr:             r.Expr,
 	}
 }
 
