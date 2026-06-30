@@ -26,3 +26,14 @@ export async function deleteRule(id) {
   const { data } = await client.delete(`/rules/${id}`);
   return unwrap(data);
 }
+
+// Routing-classifier (probe) settings: { mock, url, region }.
+export async function getRouterProbe() {
+  const { data } = await client.get('/router-probe');
+  return unwrap(data);
+}
+
+export async function setRouterProbe(payload) {
+  const { data } = await client.put('/router-probe', payload);
+  return unwrap(data);
+}

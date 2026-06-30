@@ -69,5 +69,17 @@
     "saveFailed": "保存失败",
     "deleteFailed": "删除失败",
     "updateFailed": "更新失败"
+  },
+  "probe": {
+    "title": "路由分类器（小模型探针）",
+    "help": "用到 w 或 t 的路由表达式需要分类器来预测它们。Mock = 内置启发式，不发外部请求（适合先试规则）。真实 = 每次预测都 POST 到你在 SageMaker 端点前面的 HTTP 代理。",
+    "modeMock": "Mock（内置，不发外部请求）",
+    "modeReal": "真实（调用代理 URL）",
+    "url": "代理 URL（POST，OpenAI chat-completions 格式）",
+    "urlPlaceholder": "https://your-proxy.example.com/invoke",
+    "region": "区域（仅记录）",
+    "save": "保存探针设置",
+    "saved": "路由探针设置已保存",
+    "saveFailed": "保存探针设置失败"
   }
 }

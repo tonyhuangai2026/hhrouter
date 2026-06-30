@@ -56,12 +56,12 @@ var randIntn = rand.Intn
 // take effect without a restart.
 type Engine struct {
 	db *gorm.DB
-	// probe is the routing classifier used to obtain the w/t signals that custom
-	// rule expressions reference. It is invoked ON DEMAND — only when an enabled
-	// rule's expression actually references w or t — so rules that don't use the
-	// classifier incur zero extra latency. nil = no probe configured (expressions
-	// referencing w/t then evaluate with w=0,t=0).
-	probe probe.Probe
+	// probeResolver returns the routing classifier to use for the CURRENT request,
+	// resolved fresh each time so a settings change (mock⇄real, URL edit) takes
+	// effect without a restart. It returns nil when no probe is configured. The
+	// probe is invoked ON DEMAND — only when an enabled rule's expression actually
+	// references w or t — so probe-less routing incurs zero extra latency.
+	probeResolver func() probe.Probe
 }
 
 // NewEngine constructs an Engine backed by the given database handle.
@@ -69,10 +69,26 @@ func NewEngine(db *gorm.DB) *Engine {
 	return &Engine{db: db}
 }
 
-// WithProbe sets the routing classifier and returns the engine (chainable).
+// WithProbe sets a FIXED routing classifier (resolved the same every request).
+// Used by tests; production uses WithProbeResolver to honour runtime settings.
 func (e *Engine) WithProbe(p probe.Probe) *Engine {
-	e.probe = p
+	e.probeResolver = func() probe.Probe { return p }
 	return e
+}
+
+// WithProbeResolver sets a per-request probe resolver (chainable). Returning nil
+// means "no probe this request".
+func (e *Engine) WithProbeResolver(fn func() probe.Probe) *Engine {
+	e.probeResolver = fn
+	return e
+}
+
+// currentProbe resolves the probe for this request (nil-safe).
+func (e *Engine) currentProbe() probe.Probe {
+	if e.probeResolver == nil {
+		return nil
+	}
+	return e.probeResolver()
 }
 
 // RouteInput carries everything SelectChannelCtx needs, including the rendered
@@ -210,10 +226,12 @@ func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selectio
 		Int: map[string]int{expr.VarTokens: in.EstTokens},
 		Str: map[string]string{expr.VarGroup: in.Group, expr.VarModel: in.Model},
 	}
-	if needProbe && e.probe != nil {
-		if pred, perr := e.probe.Predict(ctx, in.Prompt); perr == nil {
-			exprVars.Int[expr.VarW] = pred.W
-			exprVars.Int[expr.VarT] = pred.T
+	if needProbe {
+		if p := e.currentProbe(); p != nil {
+			if pred, perr := p.Predict(ctx, in.Prompt); perr == nil {
+				exprVars.Int[expr.VarW] = pred.W
+				exprVars.Int[expr.VarT] = pred.T
+			}
 		}
 	}
 

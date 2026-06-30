@@ -69,5 +69,17 @@
     "saveFailed": "Save failed",
     "deleteFailed": "Delete failed",
     "updateFailed": "Update failed"
+  },
+  "probe": {
+    "title": "Routing classifier (small-model probe)",
+    "help": "Routing expressions that use w or t need a classifier to predict them. Mock = built-in heuristic, no external call (good for trying rules). Real = POST each prediction to your HTTP proxy in front of the SageMaker endpoint.",
+    "modeMock": "Mock (built-in, no external request)",
+    "modeReal": "Real (call the proxy URL)",
+    "url": "Proxy URL (POST, OpenAI chat-completions shape)",
+    "urlPlaceholder": "https://your-proxy.example.com/invoke",
+    "region": "Region (informational)",
+    "save": "Save probe settings",
+    "saved": "Routing probe settings saved",
+    "saveFailed": "Failed to save probe settings"
   }
 }

@@ -11,12 +11,22 @@ import {
   Popconfirm,
   Switch,
   Tooltip,
+  Card,
+  Collapse,
+  Input,
 } from '@douyinfe/semi-ui';
 import { IconPlus, IconRefresh } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import usePaginatedList from '../components/usePaginatedList';
 import { mapApiError } from '../api/helpers';
-import { listRules, createRule, updateRule, deleteRule } from '../api/rules';
+import {
+  listRules,
+  createRule,
+  updateRule,
+  deleteRule,
+  getRouterProbe,
+  setRouterProbe,
+} from '../api/rules';
 import { listChannels } from '../api/channels';
 
 const { Title, Text } = Typography;
@@ -47,6 +57,28 @@ export default function RoutingRules() {
   const [editing, setEditing] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [formApi, setFormApi] = useState(null);
+
+  // Routing-classifier (probe) settings.
+  const [probe, setProbe] = useState({ mock: true, url: '', region: '' });
+  const [probeSaving, setProbeSaving] = useState(false);
+  useEffect(() => {
+    getRouterProbe()
+      .then((p) => setProbe({ mock: p.mock ?? true, url: p.url || '', region: p.region || '' }))
+      .catch(() => {});
+  }, []);
+
+  const saveProbe = useCallback(async () => {
+    setProbeSaving(true);
+    try {
+      const saved = await setRouterProbe(probe);
+      setProbe({ mock: saved.mock ?? true, url: saved.url || '', region: saved.region || '' });
+      Toast.success(t('probe.saved'));
+    } catch (e) {
+      Toast.error(mapApiError(e) || t('probe.saveFailed'));
+    } finally {
+      setProbeSaving(false);
+    }
+  }, [probe, t]);
 
   // Load all channels for the target-channel multi-select (large page size).
   useEffect(() => {
@@ -288,6 +320,45 @@ export default function RoutingRules() {
           </Button>
         </Space>
       </Space>
+
+      {/* Routing classifier (small-model probe) settings. Collapsed by default
+          so it doesn't crowd the rule list. */}
+      <Collapse style={{ marginBottom: 16 }}>
+        <Collapse.Panel header={t('probe.title')} itemKey="probe">
+          <Card bodyStyle={{ padding: 16 }}>
+            <Text type="tertiary" size="small" style={{ display: 'block', marginBottom: 12, whiteSpace: 'pre-line' }}>
+              {t('probe.help')}
+            </Text>
+            <Space align="center" style={{ marginBottom: 12 }}>
+              <Switch checked={probe.mock} onChange={(v) => setProbe((p) => ({ ...p, mock: v }))} />
+              <Text>{probe.mock ? t('probe.modeMock') : t('probe.modeReal')}</Text>
+            </Space>
+            <div style={{ maxWidth: 560 }}>
+              <Text size="small" type="tertiary">{t('probe.url')}</Text>
+              <Input
+                value={probe.url}
+                onChange={(v) => setProbe((p) => ({ ...p, url: v }))}
+                placeholder={t('probe.urlPlaceholder')}
+                disabled={probe.mock}
+                style={{ marginTop: 4, marginBottom: 12 }}
+              />
+              <Text size="small" type="tertiary">{t('probe.region')}</Text>
+              <Input
+                value={probe.region}
+                onChange={(v) => setProbe((p) => ({ ...p, region: v }))}
+                placeholder="us-east-1"
+                disabled={probe.mock}
+                style={{ marginTop: 4, marginBottom: 12, maxWidth: 220 }}
+              />
+              <div>
+                <Button theme="solid" type="primary" loading={probeSaving} onClick={saveProbe}>
+                  {t('probe.save')}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </Collapse.Panel>
+      </Collapse>
 
       <Table
         columns={columns}

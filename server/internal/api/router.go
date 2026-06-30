@@ -68,12 +68,21 @@ func registerRelayRoutes(r *gin.Engine, d Deps) {
 	channelSvc := service.NewChannelService(d.DB, d.Redis, d.SecretKey)
 	logSvc := service.NewLogService(d.DB)
 	engine := router.NewEngine(d.DB)
-	// Routing classifier ("small model" probe). Mock-only for now (real SageMaker
-	// integration is deferred); the engine invokes it only when a rule expression
-	// references the w/t signals, so this adds no latency to probe-less routing.
-	if model.GetOption(d.DB, model.OptRouterProbeMock, "true") != "false" {
-		engine = engine.WithProbe(probe.NewMockProbe())
-	}
+	// Routing classifier ("small model" probe), resolved per request from current
+	// settings so the mock⇄real toggle and proxy URL take effect without a
+	// restart. Mock (default) = built-in deterministic classifier, no external
+	// call. Real = POST to the configured HTTP proxy fronting the SageMaker
+	// endpoint. The engine invokes whichever only when a rule expression
+	// references w/t, so probe-less routing adds no latency.
+	engine = engine.WithProbeResolver(func() probe.Probe {
+		if model.GetOption(d.DB, model.OptRouterProbeMock, "true") != "false" {
+			return probe.NewMockProbe()
+		}
+		if u := model.GetOption(d.DB, model.OptRouterProbeURL, ""); u != "" {
+			return probe.NewHTTPProbe(u)
+		}
+		return nil // real mode but no URL configured → no probe (w/t default 0)
+	})
 
 	quotaSvc := d.Quota
 	if quotaSvc == nil {
@@ -114,6 +123,11 @@ func registerRuleRoutes(api *gin.RouterGroup, d Deps) {
 	admin.POST("/rules", ruleCtrl.Create)
 	admin.PUT("/rules/:id", ruleCtrl.Update)
 	admin.DELETE("/rules/:id", ruleCtrl.Delete)
+
+	// Routing-classifier (probe) settings: mock toggle + proxy URL + region.
+	probeCtrl := controller.NewRouterProbeController(d.DB)
+	admin.GET("/router-probe", probeCtrl.Get)
+	admin.PUT("/router-probe", probeCtrl.Put)
 }
 
 // registerDashboardRoutes wires up the T8 request-log analytics endpoints

@@ -86,7 +86,7 @@ type RequestLog struct {
 	HTTPStatus   int       `gorm:"not null;default:0" json:"http_status"`
 	ErrorMessage string    `gorm:"type:text" json:"error_message,omitempty"` // nullable
 
-	LatencyMs int  `gorm:"not null;default:0" json:"latency_ms"`
+	LatencyMs int `gorm:"not null;default:0" json:"latency_ms"`
 	// FirstTokenMs is the time-to-first-token (TTFT) in milliseconds for a
 	// streaming request: the wall-clock from the start of the upstream stream to
 	// the first non-empty content delta. It is nullable and stream-only — nil for

@@ -30,6 +30,12 @@ const (
 	// OptRouterProbeEndpoint — the SageMaker endpoint name for the real classifier
 	// (unused while mock is active; stored for the future real integration).
 	OptRouterProbeEndpoint = "RouterProbeEndpoint"
+	// OptRouterProbeURL — the HTTP(S) proxy URL in front of the SageMaker
+	// classifier. When mock is off and this is set, the engine POSTs the
+	// classifier request here (the machine stays IAM-free; the proxy signs SigV4).
+	OptRouterProbeURL = "RouterProbeURL"
+	// OptRouterProbeRegion — informational AWS region of the classifier endpoint.
+	OptRouterProbeRegion = "RouterProbeRegion"
 )
 
 // GetOption returns the value of an option key, or def if absent.
@@ -39,6 +45,13 @@ func GetOption(db *gorm.DB, key, def string) string {
 		return def
 	}
 	return opt.Value
+}
+
+// SetOption upserts an option key/value (creates the row or updates its value).
+func SetOption(db *gorm.DB, key, value string) error {
+	return db.Where(Option{Key: key}).
+		Assign(Option{Value: value}).
+		FirstOrCreate(&Option{}).Error
 }
 
 // DefaultUserQuota reads the DefaultUserQuota option as an int64 (0 on failure).

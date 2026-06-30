@@ -24,7 +24,7 @@ type Token struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	UserID uint `gorm:"index;not null" json:"user_id"`
+	UserID uint   `gorm:"index;not null" json:"user_id"`
 	Name   string `gorm:"type:varchar(128);not null" json:"name"`
 
 	// Key holds the plaintext key beginning with "sk-" only transiently: it is
@@ -41,7 +41,7 @@ type Token struct {
 	// Quota / UsedQuota are in micro-USD (1 USD = 1_000_000); -1 = unlimited
 	// (QuotaUnlimited). USD billing debits UsedQuota by each request's computed
 	// micro-USD cost. (Unit changed from tokens; values are not auto-converted.)
-	Quota     int64 `gorm:"not null;default:-1" json:"quota"` // -1 = unlimited, else micro-USD
+	Quota     int64 `gorm:"not null;default:-1" json:"quota"`     // -1 = unlimited, else micro-USD
 	UsedQuota int64 `gorm:"not null;default:0" json:"used_quota"` // consumed, micro-USD
 
 	ExpiredAt *time.Time `json:"expired_at,omitempty"` // nullable
