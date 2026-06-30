@@ -10,6 +10,7 @@ import {
   Toast,
   Popconfirm,
   Switch,
+  Tooltip,
 } from '@douyinfe/semi-ui';
 import { IconPlus, IconRefresh } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +20,18 @@ import { listRules, createRule, updateRule, deleteRule } from '../api/rules';
 import { listChannels } from '../api/channels';
 
 const { Title, Text } = Typography;
+
+// Clickable routing-expression examples shown under the expr field. The `expr`
+// is the literal (language-neutral) expression inserted on click; `key` maps to
+// a localized one-line description in rules.json (form.exprEx.<key>).
+const EXPR_EXAMPLES = [
+  { key: 'write', expr: 'w == 1' },
+  { key: 'longWrite', expr: 'w == 1 && t > 500' },
+  { key: 'short', expr: 't < 150' },
+  { key: 'vipOrWrite', expr: 'group == "vip" || w == 1' },
+  { key: 'bigPrompt', expr: 'tokens > 8000' },
+  { key: 'modelAndWrite', expr: 'model == "gpt-4o" && w == 1' },
+];
 
 // Sort rules by priority ascending (lower = matched first, Tech Design §5).
 function byPriority(a, b) {
@@ -332,9 +345,28 @@ export default function RoutingRules() {
             autosize={{ minRows: 1, maxRows: 3 }}
             style={{ fontFamily: 'var(--semi-font-family-mono, monospace)' }}
           />
-          <Text type="tertiary" size="small" style={{ display: 'block', marginTop: -8, marginBottom: 4, whiteSpace: 'pre-line' }}>
+          <Text type="tertiary" size="small" style={{ display: 'block', marginTop: -8, marginBottom: 6, whiteSpace: 'pre-line' }}>
             {t('form.exprHelp')}
           </Text>
+          <div style={{ marginBottom: 4 }}>
+            <Text type="tertiary" size="small" style={{ display: 'block', marginBottom: 4 }}>
+              {t('form.exprExamplesTitle')}
+            </Text>
+            <Space spacing={6} wrap>
+              {EXPR_EXAMPLES.map((ex) => (
+                <Tooltip key={ex.key} content={t(`form.exprEx.${ex.key}`)}>
+                  <Tag
+                    color="orange"
+                    type="light"
+                    style={{ fontFamily: 'var(--semi-font-family-mono, monospace)', cursor: 'pointer' }}
+                    onClick={() => formApi && formApi.setValue('expr', ex.expr)}
+                  >
+                    {ex.expr}
+                  </Tag>
+                </Tooltip>
+              ))}
+            </Space>
+          </div>
 
           <Title heading={6} style={{ marginTop: 8 }}>
             {t('form.targetSectionTitle')}

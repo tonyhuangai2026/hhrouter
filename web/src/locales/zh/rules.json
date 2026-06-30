@@ -26,12 +26,21 @@
     "maxTokens": "最大 tokens",
     "expr": "路由表达式",
     "exprPlaceholder": "例如 w == 1 && t > 500",
-    "exprHelp": "可选。在上面的匹配条件之上额外求值的自定义条件（两者都需满足）。\n变量：w（1=下一回合可能写/调用工具，否则0）、t（预计输出 token）、tokens（输入 token）、group、model。\n示例：w == 1 && t > 500   ·   group == \"vip\" || w == 1\n使用 w 或 t 会让小模型路由分类器每次请求调用一次。",
+    "exprHelp": "可选。在上面的匹配条件之上再求值的条件——两者都满足，规则才生效。\n变量：w（1=下一回合可能写代码/调用工具，否则0）· t（预计输出 token）· tokens（输入 token）· group（密钥所属组）· model（请求的模型）。\n运算符：== != < <= > >= ，用 &&（且）||（或）!（非）和 ( ) 组合。\n注意：用到 w 或 t 会让小模型分类器每次请求调用一次；其他变量不增加延迟。",
     "targetSectionTitle": "目标",
     "targetChannels": "目标渠道",
     "targetChannelsPlaceholder": "选择已有渠道",
     "targetGroup": "或目标分组（渠道的可选替代项）",
-    "targetGroupPlaceholder": "渠道分组标签"
+    "targetGroupPlaceholder": "渠道分组标签",
+    "exprExamplesTitle": "示例（点击填入）：",
+    "exprEx": {
+      "write": "下一回合可能调用工具 / 写代码",
+      "longWrite": "调用工具 且 预计输出很长",
+      "short": "预计输出很短（用便宜模型）",
+      "vipOrWrite": "VIP 密钥，或任意工具调用回合",
+      "bigPrompt": "输入上下文很大",
+      "modelAndWrite": "某个特定模型在调用工具"
+    }
   },
   "match": {
     "any": "任意（无约束）",

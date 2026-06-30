@@ -26,12 +26,21 @@
     "maxTokens": "Max tokens",
     "expr": "Routing expression",
     "exprPlaceholder": "e.g. w == 1 && t > 500",
-    "exprHelp": "Optional. Custom condition evaluated on top of the match above (both must pass).\nVariables: w (1=next turn likely writes/calls a tool, else 0), t (predicted output tokens), tokens (prompt tokens), group, model.\nExamples: w == 1 && t > 500   ·   group == \"vip\" || w == 1\nUsing w or t calls the small-model router classifier once per request.",
+    "exprHelp": "Optional. A condition evaluated on top of the match above — BOTH must pass for the rule to apply.\nVariables: w (1 = next turn likely writes / calls a tool, else 0) · t (predicted output tokens) · tokens (input prompt tokens) · group (key's group) · model (requested model).\nOperators: == != < <= > >=  combine with && (and) || (or) ! (not) and ( ).\nNote: using w or t invokes the small-model router classifier once per request; other variables add no latency.",
     "targetSectionTitle": "Target",
     "targetChannels": "Target channels",
     "targetChannelsPlaceholder": "Select existing channels",
     "targetGroup": "Or target group (optional alternative to channels)",
-    "targetGroupPlaceholder": "channel group label"
+    "targetGroupPlaceholder": "channel group label",
+    "exprExamplesTitle": "Examples (click to use):",
+    "exprEx": {
+      "write": "next turn likely calls a tool / writes code",
+      "longWrite": "tool call AND a long predicted output",
+      "short": "short predicted output (cheap model)",
+      "vipOrWrite": "VIP key, or any tool-call turn",
+      "bigPrompt": "large input context",
+      "modelAndWrite": "a specific model doing a tool call"
+    }
   },
   "match": {
     "any": "any (no constraints)",
