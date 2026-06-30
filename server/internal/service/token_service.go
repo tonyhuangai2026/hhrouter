@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -278,6 +279,38 @@ func (s *TokenService) List(userID uint) ([]TokenView, error) {
 	for i := range ts {
 		out = append(out, s.toView(&ts[i]))
 	}
+	return out, nil
+}
+
+// DistinctGroups returns the set of routing groups in use across all tokens AND
+// channels, sorted. Routing rules match on the token's group (match.groups) and
+// can target a channel group, so both populate the rule editor's group dropdown.
+// Admin-scoped (not per-user): a routing rule is a global, admin-only construct.
+func (s *TokenService) DistinctGroups() ([]string, error) {
+	set := map[string]bool{}
+	var tokenGroups []string
+	if err := s.db.Model(&model.Token{}).Distinct().Pluck("group", &tokenGroups).Error; err != nil {
+		return nil, err
+	}
+	for _, g := range tokenGroups {
+		if g = strings.TrimSpace(g); g != "" {
+			set[g] = true
+		}
+	}
+	var chanGroups []string
+	if err := s.db.Model(&model.Channel{}).Distinct().Pluck("\"group\"", &chanGroups).Error; err != nil {
+		return nil, err
+	}
+	for _, g := range chanGroups {
+		if g = strings.TrimSpace(g); g != "" {
+			set[g] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for g := range set {
+		out = append(out, g)
+	}
+	sort.Strings(out)
 	return out, nil
 }
 

@@ -26,6 +26,7 @@ import {
   deleteRule,
   getRouterProbe,
   setRouterProbe,
+  listRuleGroups,
 } from '../api/rules';
 import { listChannels } from '../api/channels';
 
@@ -53,10 +54,18 @@ export default function RoutingRules() {
   const { items, total, page, pageSize, loading, load } = usePaginatedList(listRules);
 
   const [channels, setChannels] = useState([]);
+  const [groupOptions, setGroupOptions] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [formApi, setFormApi] = useState(null);
+
+  // Distinct routing groups for the "key groups" dropdown (best-effort).
+  useEffect(() => {
+    listRuleGroups()
+      .then((gs) => setGroupOptions((gs || []).map((g) => ({ label: g, value: g }))))
+      .catch(() => {});
+  }, []);
 
   // Routing-classifier (probe) settings.
   const [probe, setProbe] = useState({ mock: true, url: '', region: '' });
@@ -397,7 +406,16 @@ export default function RoutingRules() {
           <Title heading={6} style={{ marginTop: 8 }}>
             {t('form.matchSectionTitle')}
           </Title>
-          <Form.TagInput field="groups" label={t('form.groups')} placeholder={t('form.groupsPlaceholder')} allowDuplicates={false} />
+          <Form.Select
+            field="groups"
+            label={t('form.groups')}
+            placeholder={t('form.groupsPlaceholder')}
+            multiple
+            filter
+            allowCreate
+            optionList={groupOptions}
+            style={{ width: '100%' }}
+          />
           <Form.TagInput
             field="models"
             label={t('form.models')}

@@ -37,3 +37,9 @@ export async function setRouterProbe(payload) {
   const { data } = await client.put('/router-probe', payload);
   return unwrap(data);
 }
+
+// Distinct routing groups in use (for the rule editor's group dropdown).
+export async function listRuleGroups() {
+  const { data } = await client.get('/rule-groups');
+  return data?.groups || [];
+}

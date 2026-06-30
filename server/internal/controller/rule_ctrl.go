@@ -15,12 +15,25 @@ import (
 // CRUD over routing_rules. All routes are mounted behind JWTAuth()+AdminOnly()
 // in api/router.go.
 type RuleController struct {
-	rules *service.RuleService
+	rules  *service.RuleService
+	tokens *service.TokenService
 }
 
-// NewRuleController constructs a RuleController.
-func NewRuleController(rules *service.RuleService) *RuleController {
-	return &RuleController{rules: rules}
+// NewRuleController constructs a RuleController. tokens is used only to populate
+// the rule editor's group dropdown (distinct token/channel groups).
+func NewRuleController(rules *service.RuleService, tokens *service.TokenService) *RuleController {
+	return &RuleController{rules: rules, tokens: tokens}
+}
+
+// Groups handles GET /api/rule-groups: the distinct routing groups in use, for
+// the rule editor's "key groups" dropdown.
+func (c *RuleController) Groups(ctx *gin.Context) {
+	groups, err := c.tokens.DistinctGroups()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to list groups", "type": "internal"}})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"groups": groups})
 }
 
 // ruleRequest is the JSON body for create/update. Pointer fields let the

@@ -114,7 +114,7 @@ func registerRuleRoutes(api *gin.RouterGroup, d Deps) {
 	}
 
 	ruleSvc := service.NewRuleService(d.DB)
-	ruleCtrl := controller.NewRuleController(ruleSvc)
+	ruleCtrl := controller.NewRuleController(ruleSvc, service.NewTokenService(d.DB))
 
 	admin := api.Group("")
 	admin.Use(middleware.JWTAuth(d.JWTSecret), middleware.AdminOnly())
@@ -123,6 +123,8 @@ func registerRuleRoutes(api *gin.RouterGroup, d Deps) {
 	admin.POST("/rules", ruleCtrl.Create)
 	admin.PUT("/rules/:id", ruleCtrl.Update)
 	admin.DELETE("/rules/:id", ruleCtrl.Delete)
+	// Distinct routing groups for the rule editor's group dropdown.
+	admin.GET("/rule-groups", ruleCtrl.Groups)
 
 	// Routing-classifier (probe) settings: mock toggle + proxy URL + region.
 	probeCtrl := controller.NewRouterProbeController(d.DB)
