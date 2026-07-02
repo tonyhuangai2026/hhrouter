@@ -44,9 +44,13 @@ func NewHTTPProbe(url string) *HTTPProbe {
 // Name implements Probe.
 func (h *HTTPProbe) Name() string { return "http" }
 
-// chatRequest / chatResponse mirror the classifier's OpenAI-compatible shape.
+// chatRequest carries BOTH the convenient {prompt} form and the OpenAI-style
+// {messages} form, so the request works whether the upstream is a plain SageMaker
+// container (OpenAI chat-completions) or a proxy Lambda that accepts a top-level
+// prompt. An upstream simply ignores the field it doesn't use.
 type chatRequest struct {
 	Model       string        `json:"model"`
+	Prompt      string        `json:"prompt"`
 	Messages    []chatMessage `json:"messages"`
 	MaxTokens   int           `json:"max_tokens"`
 	Temperature float64       `json:"temperature"`
@@ -57,12 +61,22 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-type chatResponse struct {
-	Choices []struct {
+// probeResponse is a superset of the response shapes we accept, in priority
+// order:
+//  1. {"prediction":{"w":..,"t":..}}      — the proxy Lambda's parsed form
+//  2. {"raw":"{\"w\":..,\"t\":..}"}        — the proxy Lambda's raw JSON string
+//  3. {"choices":[{"message":{"content":"{...}"}}]} — raw OpenAI/vLLM shape
+//  4. {"w":..,"t":..}                       — the bare prediction object
+type probeResponse struct {
+	Prediction *Prediction `json:"prediction"`
+	Raw        string      `json:"raw"`
+	Choices    []struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	W *int `json:"w"`
+	T *int `json:"t"`
 }
 
 // Predict implements Probe by POSTing the prompt to the proxy and parsing the
@@ -70,6 +84,7 @@ type chatResponse struct {
 func (h *HTTPProbe) Predict(ctx context.Context, prompt string) (Prediction, error) {
 	body, _ := json.Marshal(chatRequest{
 		Model:       servedModel,
+		Prompt:      prompt,
 		Messages:    []chatMessage{{Role: "user", Content: prompt}},
 		MaxTokens:   16,
 		Temperature: 0,
@@ -90,20 +105,43 @@ func (h *HTTPProbe) Predict(ctx context.Context, prompt string) (Prediction, err
 		return Prediction{}, fmt.Errorf("router probe http %d: %s", resp.StatusCode, snippet(raw))
 	}
 
-	var cr chatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
+	var pr probeResponse
+	if err := json.Unmarshal(raw, &pr); err != nil {
 		return Prediction{}, fmt.Errorf("router probe decode response: %w", err)
 	}
-	if len(cr.Choices) == 0 {
-		return Prediction{}, fmt.Errorf("router probe: no choices in response")
+
+	// 1) proxy Lambda's parsed prediction object.
+	if pr.Prediction != nil {
+		return *pr.Prediction, nil
 	}
-	// The prediction is a JSON string in the message content.
-	content := strings.TrimSpace(cr.Choices[0].Message.Content)
-	var pred Prediction
-	if err := json.Unmarshal([]byte(content), &pred); err != nil {
-		return Prediction{}, fmt.Errorf("router probe parse prediction %q: %w", snippet([]byte(content)), err)
+	// 2) proxy Lambda's raw JSON string.
+	if s := strings.TrimSpace(pr.Raw); s != "" {
+		var pred Prediction
+		if err := json.Unmarshal([]byte(s), &pred); err == nil {
+			return pred, nil
+		}
 	}
-	return pred, nil
+	// 3) raw OpenAI/vLLM shape: {w,t} JSON string in choices[0].message.content.
+	if len(pr.Choices) > 0 {
+		content := strings.TrimSpace(pr.Choices[0].Message.Content)
+		var pred Prediction
+		if err := json.Unmarshal([]byte(content), &pred); err != nil {
+			return Prediction{}, fmt.Errorf("router probe parse prediction %q: %w", snippet([]byte(content)), err)
+		}
+		return pred, nil
+	}
+	// 4) bare {w,t} at the top level.
+	if pr.W != nil || pr.T != nil {
+		p := Prediction{}
+		if pr.W != nil {
+			p.W = *pr.W
+		}
+		if pr.T != nil {
+			p.T = *pr.T
+		}
+		return p, nil
+	}
+	return Prediction{}, fmt.Errorf("router probe: unrecognized response shape: %s", snippet(raw))
 }
 
 func snippet(b []byte) string {

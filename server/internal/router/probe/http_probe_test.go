@@ -35,8 +35,57 @@ func TestHTTPProbe_ParsesPrediction(t *testing.T) {
 	if len(gotBody.Messages) != 1 || gotBody.Messages[0].Role != "user" {
 		t.Errorf("messages = %+v", gotBody.Messages)
 	}
+	// Both request forms are sent so prompt-style proxies also work.
+	if gotBody.Prompt == "" {
+		t.Error("prompt field not sent")
+	}
 	if gotBody.MaxTokens != 16 {
 		t.Errorf("max_tokens = %d, want 16", gotBody.MaxTokens)
+	}
+}
+
+// The proxy Lambda returns {"raw":"...","prediction":{...},"usage":{...}}.
+func TestHTTPProbe_ParsesLambdaPredictionShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"raw":"{\"w\":0,\"t\":1000}","prediction":{"w":0,"t":1000},"usage":{"prompt_tokens":40}}`))
+	}))
+	defer srv.Close()
+	pred, err := NewHTTPProbe(srv.URL).Predict(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("predict: %v", err)
+	}
+	if pred.W != 0 || pred.T != 1000 {
+		t.Errorf("prediction = %+v, want {0,1000}", pred)
+	}
+}
+
+// Falls back to the raw JSON string when there is no parsed prediction object.
+func TestHTTPProbe_ParsesRawStringShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"raw":"{\"w\":1,\"t\":250}"}`))
+	}))
+	defer srv.Close()
+	pred, err := NewHTTPProbe(srv.URL).Predict(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("predict: %v", err)
+	}
+	if pred.W != 1 || pred.T != 250 {
+		t.Errorf("prediction = %+v, want {1,250}", pred)
+	}
+}
+
+// Accepts a bare {w,t} object too.
+func TestHTTPProbe_ParsesBareShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"w":1,"t":42}`))
+	}))
+	defer srv.Close()
+	pred, err := NewHTTPProbe(srv.URL).Predict(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("predict: %v", err)
+	}
+	if pred.W != 1 || pred.T != 42 {
+		t.Errorf("prediction = %+v, want {1,42}", pred)
 	}
 }
 
