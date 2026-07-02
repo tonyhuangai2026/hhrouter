@@ -555,7 +555,13 @@ func (s *ChannelService) fetchAnthropicModels(ctx context.Context, ch *model.Cha
 	}
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if key != "" {
+		// Send BOTH auth headers: native Anthropic authenticates with x-api-key,
+		// but many Anthropic-COMPATIBLE gateways (e.g. kiro-gateway) authenticate
+		// /v1/models with Authorization: Bearer and reject x-api-key with 401.
+		// Native Anthropic ignores the extra Bearer, so sending both satisfies
+		// both upstream kinds and avoids falling back to the tiny built-in list.
 		req.Header.Set("x-api-key", key)
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
 	resp, err := s.http.Do(req)

@@ -121,6 +121,40 @@ func TestFetchModels_OpenAI_V1Models(t *testing.T) {
 	}
 }
 
+// --- Anthropic: gateway that authenticates /v1/models via Bearer ------------
+
+// Some Anthropic-COMPATIBLE gateways (e.g. kiro-gateway) reject x-api-key on
+// /v1/models with 401 and require Authorization: Bearer. FetchModels must send
+// both headers so the live list is fetched instead of falling back to the tiny
+// built-in list.
+func TestFetchModels_Anthropic_BearerGateway(t *testing.T) {
+	gdb := newChannelTestDB(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk-anth" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"Invalid or missing API Key"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"claude-opus-4.5"},{"id":"claude-haiku-4.5"},{"id":"auto-kiro"}]}`))
+	}))
+	defer srv.Close()
+
+	id := seedChannel(t, gdb, &model.Channel{Name: "kiro", Type: model.ChannelAnthropic, BaseURL: srv.URL, Status: model.ChannelEnabled}, "sk-anth")
+	svc := NewChannelService(gdb, nil, testSecret)
+
+	res, err := svc.FetchModels(context.Background(), id, false)
+	if err != nil {
+		t.Fatalf("FetchModels: %v", err)
+	}
+	if res.Source != "upstream" {
+		t.Fatalf("source=%q msg=%q, want upstream (Bearer should authenticate)", res.Source, res.Message)
+	}
+	if len(res.Models) != 3 || res.Models[0] != "claude-opus-4.5" {
+		t.Fatalf("models=%v, want the 3 live ids", res.Models)
+	}
+}
+
 // --- OpenAI fallback: /v1/models 404 -> /models -----------------------------
 
 func TestFetchModels_OpenAI_FallbackToModels(t *testing.T) {
