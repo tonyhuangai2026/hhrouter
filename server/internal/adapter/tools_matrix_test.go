@@ -225,6 +225,33 @@ func TestBedrockAdapter_ParseStreamChunk_ToolUse(t *testing.T) {
 	}
 }
 
+// The LIVE bedrock-runtime endpoint returns toolUse at the TOP LEVEL of the
+// event payload (no "start"/"delta" wrapper) — the shape that was silently
+// dropped before the fix. Verify both start and delta parse from it.
+func TestBedrockAdapter_ParseStreamChunk_ToolUse_TopLevelShape(t *testing.T) {
+	a := NewBedrockAdapter(stubDecryptor{})
+	// Real captured shape: {"toolUse":{"name":..,"toolUseId":..,"type":"tool_use"}}
+	start, m1, err := a.ParseStreamChunk("contentBlockStart",
+		[]byte(`{"contentBlockIndex":1,"toolUse":{"name":"get_weather","toolUseId":"tooluse_abc","type":"tool_use"}}`))
+	if err != nil || !m1 || start.ToolCallDelta == nil {
+		t.Fatalf("top-level toolUse start not parsed: %+v err=%v", start, err)
+	}
+	if start.ToolCallDelta.Name != "get_weather" || start.ToolCallDelta.ID != "tooluse_abc" {
+		t.Fatalf("start delta wrong: %+v", start.ToolCallDelta)
+	}
+	// Real captured delta shape: {"toolUse":{"input":"ci"}}
+	delta, m2, err := a.ParseStreamChunk("contentBlockDelta",
+		[]byte(`{"contentBlockIndex":1,"toolUse":{"input":"{\"city\":"}}`))
+	if err != nil || !m2 || delta.ToolCallDelta == nil || delta.ToolCallDelta.ArgsFragment != `{"city":` {
+		t.Fatalf("top-level toolUse delta not parsed: %+v err=%v", delta, err)
+	}
+	// A plain top-level text delta still works.
+	txt, m3, _ := a.ParseStreamChunk("contentBlockDelta", []byte(`{"contentBlockIndex":0,"delta":{"text":"hi"}}`))
+	if !m3 || txt.Delta != "hi" {
+		t.Fatalf("text delta regressed: %+v", txt)
+	}
+}
+
 // ===================== Anthropic stream: tool_use (cross-format) =============
 
 // When an Anthropic UPSTREAM streams a tool call and the OUTPUT is OpenAI (the

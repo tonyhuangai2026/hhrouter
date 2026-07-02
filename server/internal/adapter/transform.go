@@ -1098,6 +1098,10 @@ func anthropicStopToUnified(s string) StopReason {
 	}
 }
 
+// StopToAnthropicWire is the exported form of stopToAnthropic, used by the relay
+// when it renders Anthropic stream framing directly (tool-call block handling).
+func StopToAnthropicWire(s StopReason) string { return stopToAnthropic(s) }
+
 // stopToAnthropic maps a normalized StopReason back to an Anthropic stop_reason.
 func stopToAnthropic(s StopReason) string {
 	switch s {

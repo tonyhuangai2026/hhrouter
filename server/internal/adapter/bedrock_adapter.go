@@ -167,28 +167,72 @@ type bedrockConverseResponse struct {
 // contentBlockDelta→delta.text, messageStop→stopReason,
 // metadata→usage.{inputTokens,outputTokens,totalTokens}.
 
+// bedrockToolUseStart / bedrockToolUseDelta are the toolUse payload shapes seen
+// on contentBlockStart / contentBlockDelta.
+type bedrockToolUseStart struct {
+	ToolUseID string `json:"toolUseId"`
+	Name      string `json:"name"`
+}
+
+type bedrockToolUseDelta struct {
+	Input string `json:"input"`
+}
+
 // bedrockContentBlockDelta is the UNWRAPPED contentBlockDelta event body. The
-// delta may carry text (the only kind this MVP surfaces).
+// delta carries either text OR a toolUse input fragment. Field placement varies
+// by endpoint: the AWS Converse spec nests it under `delta`, but the live
+// bedrock-runtime endpoint we target returns `toolUse`/`text` at the TOP LEVEL of
+// the payload — so we accept both and prefer whichever is populated.
 type bedrockContentBlockDelta struct {
 	ContentBlockIndex int `json:"contentBlockIndex"`
-	Delta             struct {
-		Text    string `json:"text"`
-		ToolUse *struct {
-			Input string `json:"input"`
-		} `json:"toolUse"`
+	// spec shape: {"delta":{"text":..,"toolUse":{"input":..}}}
+	Delta struct {
+		Text    string               `json:"text"`
+		ToolUse *bedrockToolUseDelta `json:"toolUse"`
 	} `json:"delta"`
+	// top-level shape (live endpoint): {"toolUse":{"input":..}} / {"text":..}
+	Text    string               `json:"text"`
+	ToolUse *bedrockToolUseDelta `json:"toolUse"`
+}
+
+// text resolves the delta text from whichever shape carried it.
+func (d bedrockContentBlockDelta) text() string {
+	if d.Delta.Text != "" {
+		return d.Delta.Text
+	}
+	return d.Text
+}
+
+// toolInput resolves the toolUse input fragment from whichever shape carried it,
+// with ok=false when this delta has no toolUse part.
+func (d bedrockContentBlockDelta) toolInput() (string, bool) {
+	if d.Delta.ToolUse != nil {
+		return d.Delta.ToolUse.Input, true
+	}
+	if d.ToolUse != nil {
+		return d.ToolUse.Input, true
+	}
+	return "", false
 }
 
 // bedrockContentBlockStart is the UNWRAPPED contentBlockStart event body. For a
-// tool call it carries start.toolUse.{toolUseId,name}; for text it is empty.
+// tool call it carries the toolUse spec (id + name). As with the delta, the
+// toolUse object is nested under `start` per the AWS Converse spec but appears at
+// the TOP LEVEL on the live endpoint, so we accept both.
 type bedrockContentBlockStart struct {
 	ContentBlockIndex int `json:"contentBlockIndex"`
 	Start             struct {
-		ToolUse *struct {
-			ToolUseID string `json:"toolUseId"`
-			Name      string `json:"name"`
-		} `json:"toolUse"`
+		ToolUse *bedrockToolUseStart `json:"toolUse"`
 	} `json:"start"`
+	ToolUse *bedrockToolUseStart `json:"toolUse"`
+}
+
+// toolStart resolves the toolUse spec from whichever shape carried it.
+func (s bedrockContentBlockStart) toolStart() *bedrockToolUseStart {
+	if s.Start.ToolUse != nil {
+		return s.Start.ToolUse
+	}
+	return s.ToolUse
 }
 
 // bedrockMessageStop is the UNWRAPPED messageStop event body.
@@ -432,17 +476,17 @@ func (a *BedrockAdapter) ParseStreamChunk(eventType string, payload []byte) (Str
 	var out StreamChunk
 	switch eventType {
 	case "contentBlockStart":
-		// A tool call begins here (start.toolUse.{toolUseId,name}); emit the
-		// opening tool-call delta. Plain text blocks have no start payload.
+		// A tool call begins here (toolUse.{toolUseId,name}); emit the opening
+		// tool-call delta. Plain text blocks carry no toolUse payload.
 		var ev bedrockContentBlockStart
 		if err := json.Unmarshal(trimmed, &ev); err != nil {
 			return out, false, nil // structural; ignore on decode trouble
 		}
-		if ev.Start.ToolUse != nil {
+		if ts := ev.toolStart(); ts != nil {
 			out.ToolCallDelta = &ToolCallDelta{
 				Index: ev.ContentBlockIndex,
-				ID:    ev.Start.ToolUse.ToolUseID,
-				Name:  ev.Start.ToolUse.Name,
+				ID:    ts.ToolUseID,
+				Name:  ts.Name,
 			}
 			return out, true, nil
 		}
@@ -452,11 +496,11 @@ func (a *BedrockAdapter) ParseStreamChunk(eventType string, payload []byte) (Str
 		if err := json.Unmarshal(trimmed, &ev); err != nil {
 			return StreamChunk{}, false, fmt.Errorf("bedrock adapter: decode contentBlockDelta: %w", err)
 		}
-		if ev.Delta.ToolUse != nil {
-			out.ToolCallDelta = &ToolCallDelta{Index: ev.ContentBlockIndex, ArgsFragment: ev.Delta.ToolUse.Input}
+		if frag, ok := ev.toolInput(); ok {
+			out.ToolCallDelta = &ToolCallDelta{Index: ev.ContentBlockIndex, ArgsFragment: frag}
 			return out, true, nil
 		}
-		out.Delta = ev.Delta.Text
+		out.Delta = ev.text()
 	case "messageStop":
 		var ev bedrockMessageStop
 		if err := json.Unmarshal(trimmed, &ev); err != nil {

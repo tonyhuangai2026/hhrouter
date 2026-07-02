@@ -324,6 +324,8 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 		finalUsage    *adapter.Usage
 		completion    bytes.Buffer
 		anthOpened    bool
+		anthTextOpen  bool // whether the index-0 text content_block is currently open
+		anthToolIdx   int  // Anthropic content-block index of the currently-open tool_use block (0 = none open)
 		bedrockOpened bool
 		finalStop     adapter.StopReason = adapter.StopUnknown
 		fatalErr      error
@@ -331,8 +333,9 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 		firstTokenAt  *time.Time // wall-clock of the first non-empty delta (TTFT anchor)
 	)
 
-	// For Anthropic OUTPUT we must emit the message_start / content_block_start
-	// framing before the first delta and message_stop at the end.
+	// For Anthropic OUTPUT we must emit message_start before any content. The
+	// index-0 text block is opened lazily on the first TEXT delta (a tool-only
+	// turn has no text block). Tool calls open their own blocks at index >= 1.
 	emitAnthropicPrelude := func() {
 		if anthOpened {
 			return
@@ -350,6 +353,14 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 				"usage":       map[string]any{"input_tokens": 0, "output_tokens": 0},
 			},
 		})
+	}
+	// openAnthropicText opens the index-0 text block on demand.
+	openAnthropicText := func() {
+		emitAnthropicPrelude()
+		if anthTextOpen {
+			return
+		}
+		anthTextOpen = true
 		writeSSENamed(c, "content_block_start", map[string]any{
 			"type":          "content_block_start",
 			"index":         0,
@@ -376,6 +387,77 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 			emitAnthropicPrelude()
 		case OutBedrock:
 			emitBedrockPrelude()
+		}
+	}
+
+	// emitAnthropic renders one unified chunk into Anthropic SSE with correct
+	// multi-block framing: text streams as an index-0 text block; each tool call
+	// opens its OWN content_block (index >= 1) as tool_use, streams its arguments
+	// as input_json_delta, and closes when the next block/stop arrives. Returns
+	// true if it fully handled the chunk (so the caller skips the generic path).
+	closeAnthToolBlock := func() {
+		if anthToolIdx > 0 {
+			writeSSENamed(c, "content_block_stop", map[string]any{"type": "content_block_stop", "index": anthToolIdx})
+			anthToolIdx = 0
+		}
+	}
+	emitAnthropic := func(chunk adapter.StreamChunk) {
+		// Tool-call delta: open a new tool_use block on the opening fragment (has a
+		// Name), then stream argument fragments as input_json_delta.
+		if tc := chunk.ToolCallDelta; tc != nil {
+			emitAnthropicPrelude()
+			if tc.Name != "" {
+				// A new tool call begins: close any prior open block first.
+				closeAnthToolBlock()
+				if anthTextOpen {
+					writeSSENamed(c, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+					anthTextOpen = false
+				}
+				anthToolIdx = tc.Index + 1 // reserve index 0 for text
+				if anthToolIdx < 1 {
+					anthToolIdx = 1
+				}
+				writeSSENamed(c, "content_block_start", map[string]any{
+					"type":  "content_block_start",
+					"index": anthToolIdx,
+					"content_block": map[string]any{
+						"type":  "tool_use",
+						"id":    tc.ID,
+						"name":  tc.Name,
+						"input": map[string]any{},
+					},
+				})
+			}
+			if tc.ArgsFragment != "" && anthToolIdx > 0 {
+				writeSSENamed(c, "content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": anthToolIdx,
+					"delta": map[string]any{"type": "input_json_delta", "partial_json": tc.ArgsFragment},
+				})
+			}
+			return
+		}
+		// Text delta: ensure the index-0 text block is open, then stream it.
+		if chunk.Delta != "" {
+			openAnthropicText()
+			writeSSENamed(c, "content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]any{"type": "text_delta", "text": chunk.Delta},
+			})
+			return
+		}
+		// Stop reason / usage → message_delta (close any open tool block first).
+		if chunk.StopReason != adapter.StopUnknown || chunk.Usage != nil {
+			closeAnthToolBlock()
+			p := map[string]any{
+				"type":  "message_delta",
+				"delta": map[string]any{"stop_reason": adapter.StopToAnthropicWire(chunk.StopReason)},
+			}
+			if chunk.Usage != nil {
+				p["usage"] = map[string]any{"output_tokens": chunk.Usage.CompletionTokens}
+			}
+			writeSSENamed(c, "message_delta", p)
 		}
 	}
 
@@ -421,6 +503,12 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 			finalStop = chunk.StopReason
 		}
 		if !meaningful && !chunk.Done {
+			return
+		}
+		// Anthropic output needs stateful multi-block framing (text + tool_use
+		// blocks); handle it here. Other output formats use the stateless emitter.
+		if rc.outFormat == OutAnthropic {
+			emitAnthropic(chunk)
 			return
 		}
 		r.emitChunk(c, rc, chunk, ensurePrelude)
@@ -481,9 +569,15 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 		if !anthOpened {
 			emitAnthropicPrelude()
 		}
-		writeSSENamed(c, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-		// message_delta with usage + message_stop are emitted by emitChunk on the
-		// terminal chunk; ensure message_stop closes the stream.
+		// Close whichever content blocks are still open (a tool block at index>=1,
+		// and/or the index-0 text block). A tool-only turn never opened text.
+		closeAnthToolBlock()
+		if anthTextOpen {
+			writeSSENamed(c, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+			anthTextOpen = false
+		}
+		// message_delta (stop_reason/usage) is emitted by emitAnthropic on the
+		// terminal chunk; message_stop closes the stream.
 		writeSSENamed(c, "message_stop", map[string]any{"type": "message_stop"})
 	case OutBedrock:
 		if !bedrockOpened {
