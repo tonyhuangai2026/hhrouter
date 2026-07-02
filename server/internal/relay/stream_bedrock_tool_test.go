@@ -77,4 +77,16 @@ func TestPumpStream_BedrockToolUse_ToAnthropic(t *testing.T) {
 			t.Errorf("missing framing %q", want)
 		}
 	}
+	// EXACTLY ONE message_delta, carrying stop_reason=tool_use (Bedrock splits
+	// stop/usage across messageStop+metadata; a second message_delta would clobber
+	// the tool_use stop reason with end_turn).
+	if n := strings.Count(out, "event: message_delta"); n != 1 {
+		t.Errorf("message_delta count = %d, want 1:\n%s", n, out)
+	}
+	if !strings.Contains(out, `"stop_reason":"tool_use"`) {
+		t.Errorf("final stop_reason not tool_use:\n%s", out)
+	}
+	if strings.Contains(out, `"stop_reason":"end_turn"`) {
+		t.Errorf("stop_reason was clobbered to end_turn:\n%s", out)
+	}
 }

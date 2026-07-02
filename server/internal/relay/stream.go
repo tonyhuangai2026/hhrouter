@@ -447,18 +447,12 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 			})
 			return
 		}
-		// Stop reason / usage → message_delta (close any open tool block first).
-		if chunk.StopReason != adapter.StopUnknown || chunk.Usage != nil {
-			closeAnthToolBlock()
-			p := map[string]any{
-				"type":  "message_delta",
-				"delta": map[string]any{"stop_reason": adapter.StopToAnthropicWire(chunk.StopReason)},
-			}
-			if chunk.Usage != nil {
-				p["usage"] = map[string]any{"output_tokens": chunk.Usage.CompletionTokens}
-			}
-			writeSSENamed(c, "message_delta", p)
-		}
+		// Stop reason / usage do NOT emit a message_delta here: Bedrock splits them
+		// across two events (messageStop carries stopReason, metadata carries
+		// usage), which would produce two message_deltas with the second (usage-only,
+		// stop=unknown→end_turn) clobbering the real tool_use stop reason. Instead we
+		// accumulate finalStop/finalUsage in process() and emit ONE message_delta in
+		// the terminal framing below. Nothing to write per-chunk.
 	}
 
 	// process forwards a single upstream event to the client and captures any
@@ -576,8 +570,17 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 			writeSSENamed(c, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 			anthTextOpen = false
 		}
-		// message_delta (stop_reason/usage) is emitted by emitAnthropic on the
-		// terminal chunk; message_stop closes the stream.
+		// Exactly ONE message_delta carrying the final stop_reason + usage (Bedrock
+		// split these across messageStop/metadata; we accumulated them so the real
+		// stop_reason — e.g. tool_use — is not clobbered by a later usage-only event).
+		md := map[string]any{
+			"type":  "message_delta",
+			"delta": map[string]any{"stop_reason": adapter.StopToAnthropicWire(finalStop)},
+		}
+		if finalUsage != nil {
+			md["usage"] = map[string]any{"output_tokens": finalUsage.CompletionTokens}
+		}
+		writeSSENamed(c, "message_delta", md)
 		writeSSENamed(c, "message_stop", map[string]any{"type": "message_stop"})
 	case OutBedrock:
 		if !bedrockOpened {
