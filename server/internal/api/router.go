@@ -130,6 +130,7 @@ func registerRuleRoutes(api *gin.RouterGroup, d Deps) {
 	probeCtrl := controller.NewRouterProbeController(d.DB)
 	admin.GET("/router-probe", probeCtrl.Get)
 	admin.PUT("/router-probe", probeCtrl.Put)
+	admin.POST("/router-probe/test", probeCtrl.Test)
 }
 
 // registerDashboardRoutes wires up the T8 request-log analytics endpoints

@@ -1,14 +1,18 @@
 package controller
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"github.com/agent-router/server/internal/model"
+	"github.com/agent-router/server/internal/router"
+	"github.com/agent-router/server/internal/router/probe"
 )
 
 // RouterProbeController exposes the routing-classifier ("small model" probe)
@@ -82,4 +86,61 @@ func (c *RouterProbeController) Put(ctx *gin.Context) {
 		}
 	}
 	ctx.JSON(http.StatusOK, in)
+}
+
+// testRequest is the POST /api/router-probe/test body: an optional URL to test
+// (falls back to the saved one when empty), so the admin can test what's typed
+// before saving.
+type testRequest struct {
+	URL string `json:"url"`
+}
+
+// testResult is the connectivity-test response.
+type testResult struct {
+	OK        bool              `json:"ok"`
+	LatencyMs int64             `json:"latency_ms"`
+	Error     string            `json:"error,omitempty"`
+	Result    *probe.Prediction `json:"result,omitempty"`
+}
+
+// Test handles POST /api/router-probe/test: send ONE real classification request
+// to the given (or saved) proxy URL with a demo conversation prompt and report
+// whether it succeeded, the round-trip latency, and the parsed {w,t} prediction.
+// This never touches the mock — it always exercises the real HTTP path so the
+// admin can confirm the proxy is reachable and returns the expected shape.
+func (c *RouterProbeController) Test(ctx *gin.Context) {
+	var in testRequest
+	_ = ctx.ShouldBindJSON(&in) // body is optional
+	url := strings.TrimSpace(in.URL)
+	if url == "" {
+		url = strings.TrimSpace(model.GetOption(c.db, model.OptRouterProbeURL, ""))
+	}
+	if url == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "no url to test (enter a proxy URL first)", "type": "invalid_request"}})
+		return
+	}
+
+	// A short, representative conversation rendered to the classifier's prompt.
+	demo := router.RenderProbePrompt("", []struct{ Role, Text string }{
+		{Role: "user", Text: "please write a function to reverse a string"},
+	})
+
+	// Bound the test so a hung proxy can't hang the request handler.
+	reqCtx, cancel := context.WithTimeout(ctx.Request.Context(), 8*time.Second)
+	defer cancel()
+
+	p := probe.NewHTTPProbe(url)
+	start := time.Now()
+	pred, err := p.Predict(reqCtx, demo)
+	latency := time.Since(start).Milliseconds()
+
+	res := testResult{OK: err == nil, LatencyMs: latency}
+	if err != nil {
+		res.Error = err.Error()
+	} else {
+		res.Result = &pred
+	}
+	// Always 200: the test itself succeeded even when the probe failed; the OK
+	// flag carries the connectivity result for the UI.
+	ctx.JSON(http.StatusOK, res)
 }

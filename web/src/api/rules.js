@@ -38,6 +38,13 @@ export async function setRouterProbe(payload) {
   return unwrap(data);
 }
 
+// Test connectivity to a probe proxy URL (falls back to the saved URL when
+// omitted). Returns { ok, latency_ms, error?, result? }.
+export async function testRouterProbe(url) {
+  const { data } = await client.post('/router-probe/test', { url: url || '' });
+  return unwrap(data);
+}
+
 // Distinct routing groups in use (for the rule editor's group dropdown).
 export async function listRuleGroups() {
   const { data } = await client.get('/rule-groups');

@@ -26,6 +26,7 @@ import {
   deleteRule,
   getRouterProbe,
   setRouterProbe,
+  testRouterProbe,
   listRuleGroups,
 } from '../api/rules';
 import { listChannels } from '../api/channels';
@@ -88,6 +89,22 @@ export default function RoutingRules() {
       setProbeSaving(false);
     }
   }, [probe, t]);
+
+  // Connectivity test: send one real classification request to the typed URL.
+  const [probeTesting, setProbeTesting] = useState(false);
+  const [probeTestResult, setProbeTestResult] = useState(null);
+  const testProbe = useCallback(async () => {
+    setProbeTesting(true);
+    setProbeTestResult(null);
+    try {
+      const r = await testRouterProbe(probe.url);
+      setProbeTestResult(r);
+    } catch (e) {
+      setProbeTestResult({ ok: false, error: mapApiError(e) || 'request failed' });
+    } finally {
+      setProbeTesting(false);
+    }
+  }, [probe.url]);
 
   // Load all channels for the target-channel multi-select (large page size).
   useEffect(() => {
@@ -359,11 +376,35 @@ export default function RoutingRules() {
                 disabled={probe.mock}
                 style={{ marginTop: 4, marginBottom: 12, maxWidth: 220 }}
               />
-              <div>
+              <Space>
                 <Button theme="solid" type="primary" loading={probeSaving} onClick={saveProbe}>
                   {t('probe.save')}
                 </Button>
-              </div>
+                <Button
+                  loading={probeTesting}
+                  disabled={!probe.url}
+                  onClick={testProbe}
+                >
+                  {t('probe.test')}
+                </Button>
+              </Space>
+              {probeTestResult ? (
+                <div style={{ marginTop: 10 }}>
+                  {probeTestResult.ok ? (
+                    <Tag color="green" type="light">
+                      {t('probe.testOk', {
+                        latency: probeTestResult.latency_ms ?? 0,
+                        w: probeTestResult.result?.w ?? '?',
+                        tval: probeTestResult.result?.t ?? '?',
+                      })}
+                    </Tag>
+                  ) : (
+                    <Tag color="red" type="light" style={{ maxWidth: 520, whiteSpace: 'normal', height: 'auto' }}>
+                      {t('probe.testFail', { error: probeTestResult.error || 'unknown error' })}
+                    </Tag>
+                  )}
+                </div>
+              ) : null}
             </div>
           </Card>
         </Collapse.Panel>

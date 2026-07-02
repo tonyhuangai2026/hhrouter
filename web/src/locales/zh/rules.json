@@ -80,6 +80,9 @@
     "region": "区域（仅记录）",
     "save": "保存探针设置",
     "saved": "路由探针设置已保存",
-    "saveFailed": "保存探针设置失败"
+    "saveFailed": "保存探针设置失败",
+    "test": "测试连接",
+    "testOk": "连通 · {{latency}} ms · 预测 w={{w}}, t={{tval}}",
+    "testFail": "失败：{{error}}"
   }
 }

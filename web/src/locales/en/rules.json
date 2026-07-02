@@ -80,6 +80,9 @@
     "region": "Region (informational)",
     "save": "Save probe settings",
     "saved": "Routing probe settings saved",
-    "saveFailed": "Failed to save probe settings"
+    "saveFailed": "Failed to save probe settings",
+    "test": "Test connection",
+    "testOk": "OK · {{latency}} ms · predicted w={{w}}, t={{tval}}",
+    "testFail": "Failed: {{error}}"
   }
 }
