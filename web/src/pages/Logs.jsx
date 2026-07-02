@@ -12,12 +12,13 @@ import {
   Tag,
   Tooltip,
   Toast,
+  Switch,
 } from '@douyinfe/semi-ui';
 import { IconRefresh } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { mapApiError } from '../api/helpers';
-import { listLogs } from '../api/logs';
+import { listLogs, getSettings, setSettings } from '../api/logs';
 import { listChannels } from '../api/channels';
 import { listUsers } from '../api/users';
 import { formatUSD } from '../utils/money';
@@ -199,6 +200,26 @@ export default function Logs() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Request-log I/O capture toggle (admin only). When on, the relay stores each
+  // request's input/output on the log row so they show in the expanded detail.
+  const [logIO, setLogIO] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    getSettings()
+      .then((s) => setLogIO(!!s.log_io))
+      .catch(() => {});
+  }, [isAdmin]);
+  const toggleLogIO = useCallback(async (v) => {
+    setLogIO(v);
+    try {
+      await setSettings({ log_io: v });
+      Toast.success(v ? t('io.enabled') : t('io.disabled'));
+    } catch (e) {
+      setLogIO(!v); // revert on failure
+      Toast.error(mapApiError(e) || t('io.saveFailed'));
+    }
+  }, [t]);
 
   // Filters / controls.
   const [preset, setPreset] = useState('7d');
@@ -551,6 +572,36 @@ export default function Logs() {
     setLogType('all');
   }, []);
 
+  // Expanded-row detail: the captured input/output (present only when the log-IO
+  // switch was on for that request).
+  const renderIODetail = useCallback(
+    (record) => {
+      const inText = record?.request_body || '';
+      const outText = record?.response_body || '';
+      const box = {
+        margin: 0,
+        padding: '8px 10px',
+        background: 'var(--semi-color-fill-0)',
+        borderRadius: 6,
+        maxHeight: 260,
+        overflow: 'auto',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        fontFamily: 'var(--semi-font-family-mono, ui-monospace, Menlo, Consolas, monospace)',
+        fontSize: 12,
+      };
+      return (
+        <div style={{ padding: '8px 12px' }}>
+          <Text strong size="small">{t('io.input')}</Text>
+          <pre style={box}>{inText || t('io.empty')}</pre>
+          <Text strong size="small" style={{ display: 'block', marginTop: 8 }}>{t('io.output')}</Text>
+          <pre style={box}>{outText || t('io.empty')}</pre>
+        </div>
+      );
+    },
+    [t]
+  );
+
   return (
     <div className="lg-page">
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -655,6 +706,17 @@ export default function Logs() {
           <Button theme="borderless" onClick={resetFilters}>
             {t('actions.resetFilters')}
           </Button>
+
+          {isAdmin ? (
+            <Tooltip content={t('io.hint')}>
+              <Space align="center">
+                <Switch checked={logIO} onChange={toggleLogIO} size="small" />
+                <Text type="tertiary" size="small">
+                  {t('io.label')}
+                </Text>
+              </Space>
+            </Tooltip>
+          ) : null}
         </Space>
         {!isAdmin ? (
           <div style={{ marginTop: 8 }}>
@@ -681,6 +743,8 @@ export default function Logs() {
             scroll={{ x: 'max-content', y: scrollY }}
             size="middle"
             empty={t('empty.noData')}
+            expandedRowRender={renderIODetail}
+            rowExpandable={(r) => !!(r?.request_body || r?.response_body)}
             pagination={{
               currentPage: logPage,
               pageSize: PAGE_SIZE,

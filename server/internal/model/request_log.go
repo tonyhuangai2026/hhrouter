@@ -103,4 +103,12 @@ type RequestLog struct {
 	// summary/timeseries default to production-only (IsTest=false) so test
 	// traffic never pollutes production metrics; the logs listing can opt in.
 	IsTest bool `gorm:"not null;default:false;index" json:"is_test"`
+
+	// RequestBody / ResponseBody hold the captured input (rendered prompt) and
+	// output (assistant completion text). Populated ONLY when the RequestLogIO
+	// option is enabled (admin opt-in, off by default) and truncated to a cap to
+	// keep rows bounded. Nullable: NULL when the switch was off or on legacy rows.
+	// AutoMigrate adds these nullable columns; no migrate-time ALTER is needed.
+	RequestBody  *string `gorm:"type:text" json:"request_body,omitempty"`
+	ResponseBody *string `gorm:"type:text" json:"response_body,omitempty"`
 }

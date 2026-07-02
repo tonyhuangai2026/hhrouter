@@ -66,5 +66,15 @@
     "Europe/London": "London",
     "Asia/Tokyo": "Tokyo (UTC+9)",
     "Asia/Kolkata": "India (UTC+5:30)"
+  },
+  "io": {
+    "label": "Log I/O",
+    "hint": "When on, new requests store their input and output on the log row (click a row to expand). Off by default.",
+    "input": "Input",
+    "output": "Output",
+    "empty": "(empty)",
+    "enabled": "Request I/O logging enabled",
+    "disabled": "Request I/O logging disabled",
+    "saveFailed": "Failed to update setting"
   }
 }

@@ -36,6 +36,11 @@ const (
 	OptRouterProbeURL = "RouterProbeURL"
 	// OptRouterProbeRegion — informational AWS region of the classifier endpoint.
 	OptRouterProbeRegion = "RouterProbeRegion"
+	// OptRequestLogIO — when "true", the relay records each request's input
+	// (rendered prompt) and output (completion text) onto the request_log row so
+	// they show in the log detail. Off by default (privacy + row size); admin
+	// opt-in.
+	OptRequestLogIO = "RequestLogIO"
 )
 
 // GetOption returns the value of an option key, or def if absent.

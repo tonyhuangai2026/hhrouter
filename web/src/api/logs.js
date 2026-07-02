@@ -23,3 +23,15 @@ export async function listLogs(params = {}) {
   const { data } = await client.get('/logs', { params });
   return normalizeList(data);
 }
+
+// Admin misc settings: { log_io } — whether the relay records request
+// input/output onto each log row.
+export async function getSettings() {
+  const { data } = await client.get('/settings');
+  return data || {};
+}
+
+export async function setSettings(payload) {
+  const { data } = await client.put('/settings', payload);
+  return data || {};
+}

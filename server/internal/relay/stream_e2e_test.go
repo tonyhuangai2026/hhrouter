@@ -409,6 +409,39 @@ func TestBilling_CostComputedAndDebited(t *testing.T) {
 	}
 }
 
+// TestRequestLogIO_CapturesInputOutput verifies the RequestLogIO switch: with it
+// on, a successful request records the rendered input + assistant output on the
+// log; with it off (default), both stay NULL.
+func TestRequestLogIO_CapturesInputOutput(t *testing.T) {
+	env, cleanup := setupE2E(t)
+	defer cleanup()
+
+	// Default OFF → no capture.
+	before := env.countLogs(t)
+	env.doStream(t, "/v1/chat/completions",
+		`{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hidden A"}]}`)
+	off := env.waitForNewLog(t, before)
+	if off.RequestBody != nil || off.ResponseBody != nil {
+		t.Fatalf("switch off: expected NULL bodies, got req=%v resp=%v", off.RequestBody, off.ResponseBody)
+	}
+
+	// Turn ON.
+	if err := model.SetOption(env.gdb, model.OptRequestLogIO, "true"); err != nil {
+		t.Fatalf("set option: %v", err)
+	}
+	before = env.countLogs(t)
+	env.doStream(t, "/v1/chat/completions",
+		`{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"capture this input"}]}`)
+	on := env.waitForNewLog(t, before)
+	if on.RequestBody == nil || !strings.Contains(*on.RequestBody, "capture this input") {
+		t.Fatalf("switch on: request_body missing input, got %v", on.RequestBody)
+	}
+	// The mock stream emits "Hello!" as the completion text.
+	if on.ResponseBody == nil || *on.ResponseBody == "" {
+		t.Fatalf("switch on: response_body empty, got %v", on.ResponseBody)
+	}
+}
+
 func (e *e2eEnv) countLogs(t *testing.T) int64 {
 	t.Helper()
 	var n int64

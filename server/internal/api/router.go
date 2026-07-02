@@ -130,6 +130,11 @@ func registerRuleRoutes(api *gin.RouterGroup, d Deps) {
 	probeCtrl := controller.NewRouterProbeController(d.DB)
 	admin.GET("/router-probe", probeCtrl.Get)
 	admin.PUT("/router-probe", probeCtrl.Put)
+
+	// Misc admin settings (request-log I/O capture toggle).
+	settingsCtrl := controller.NewSettingsController(d.DB)
+	admin.GET("/settings", settingsCtrl.Get)
+	admin.PUT("/settings", settingsCtrl.Put)
 	admin.POST("/router-probe/test", probeCtrl.Test)
 }
 

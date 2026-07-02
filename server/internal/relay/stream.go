@@ -166,6 +166,7 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 		}
 		bill = &billing{price: price, usage: bu}
 	}
+	rc.respText = completionText // captured for optional request-log I/O
 	r.finish(rc, lastAtt, sel.Rule, status, httpStatus, errMsg, prompt, completion, total, true, time.Since(start), firstToken, bill)
 }
 

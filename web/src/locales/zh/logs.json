@@ -66,5 +66,15 @@
     "Europe/London": "伦敦",
     "Asia/Tokyo": "东京（UTC+9）",
     "Asia/Kolkata": "印度（UTC+5:30）"
+  },
+  "io": {
+    "label": "记录输入输出",
+    "hint": "开启后，新请求会把输入与输出存到日志行（点击行可展开查看）。默认关闭。",
+    "input": "输入",
+    "output": "输出",
+    "empty": "（空）",
+    "enabled": "已开启请求输入输出记录",
+    "disabled": "已关闭请求输入输出记录",
+    "saveFailed": "更新设置失败"
   }
 }

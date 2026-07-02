@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -66,6 +67,11 @@ type requestContext struct {
 	uni       adapter.UnifiedRequest
 	token     *model.Token
 	user      *model.User
+
+	// respText is the assistant output text captured for the request-log I/O
+	// feature; serve* sets it before finish() when available. finish() records it
+	// (and the rendered input) only when the RequestLogIO option is on.
+	respText string
 }
 
 // attempt records the outcome of one candidate-channel attempt for logging.
@@ -297,6 +303,7 @@ func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt i
 		body := buildResponse(rc.outFormat, uniResp)
 		c.JSON(http.StatusOK, body)
 
+		rc.respText = uniResp.Text() // captured for optional request-log I/O
 		prompt, completion, total := usageTokens(usage, estPrompt)
 		r.finish(rc, lastAtt, sel.Rule, model.LogSuccess, http.StatusOK, "",
 			prompt, completion, total, false, time.Since(start), nil, &billing{price: price, usage: usage})
@@ -406,11 +413,66 @@ func (r *Relayer) finish(rc *requestContext, att attempt, rule *model.RoutingRul
 		cost = r.pricing.Cost(bill.price, bill.usage)
 		log.CostMicroUSD = &cost
 	}
+	// Optional I/O capture: record the rendered input + assistant output when the
+	// RequestLogIO switch is on (admin opt-in, off by default).
+	if r.requestLogIOEnabled() {
+		in := truncateLog(renderInboundText(rc.uni))
+		out := truncateLog(rc.respText)
+		log.RequestBody = &in
+		log.ResponseBody = &out
+	}
+
 	_ = r.logs.Write(log)
 
 	if status == model.LogSuccess && cost > 0 {
 		_ = r.quota.Consume(context.Background(), rc.token.ID, rc.user.ID, cost)
 	}
+}
+
+// logIOMaxBytes caps each captured input/output string so a huge prompt or
+// completion can't bloat the request_logs table.
+const logIOMaxBytes = 32 * 1024
+
+// requestLogIOEnabled reports whether the admin turned on request I/O capture.
+func (r *Relayer) requestLogIOEnabled() bool {
+	return model.GetOption(r.db, model.OptRequestLogIO, "false") == "true"
+}
+
+// truncateLog trims s to logIOMaxBytes, appending a marker when it was cut.
+func truncateLog(s string) string {
+	if len(s) <= logIOMaxBytes {
+		return s
+	}
+	return s[:logIOMaxBytes] + "\n…[truncated]"
+}
+
+// renderInboundText renders the unified request's system + messages into a
+// readable transcript for the log (role: text per turn, tool blocks summarized).
+func renderInboundText(uni adapter.UnifiedRequest) string {
+	var b strings.Builder
+	if s := strings.TrimSpace(uni.System); s != "" {
+		b.WriteString("system: ")
+		b.WriteString(s)
+		b.WriteString("\n")
+	}
+	for _, m := range uni.Messages {
+		b.WriteString(m.Role)
+		b.WriteString(": ")
+		if t := m.Text(); t != "" {
+			b.WriteString(t)
+		}
+		for _, c := range m.Content {
+			if c.IsToolUse() {
+				b.WriteString("[tool_use " + c.ToolUse.Name + " " + string(c.ToolUse.Input) + "]")
+			} else if c.IsToolResult() {
+				b.WriteString("[tool_result " + string(c.ToolResult.Content) + "]")
+			} else if c.IsImage() {
+				b.WriteString("[image]")
+			}
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // buildResponse renders a UnifiedResponse into the OUTPUT format's response body
