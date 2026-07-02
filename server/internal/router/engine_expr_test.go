@@ -92,6 +92,49 @@ func TestExprRouting_NumericThreshold(t *testing.T) {
 	}
 }
 
+// TestExprRouting_ProbeResultOnSelection verifies the probe prediction is
+// surfaced on the Selection when the probe ran (for request-log display), and is
+// nil when no rule references w/t.
+func TestExprRouting_ProbeResultOnSelection(t *testing.T) {
+	db := newEngineTestDB(t)
+	ch := mustCreateChannel(t, db, model.Channel{Name: "c", Models: jsonB(t, []string{"gpt-4o"})})
+	mustCreateRule(t, db, model.RoutingRule{
+		Name: "w-rule", Enabled: true, Priority: 1,
+		Expr:             "w == 1",
+		TargetChannelIDs: jsonB(t, []uint{ch.ID}),
+	})
+	// Also a catch-all so a non-match still routes (probe still recorded).
+	mustCreateRule(t, db, model.RoutingRule{
+		Name: "catch", Enabled: true, Priority: 2,
+		TargetChannelIDs: jsonB(t, []uint{ch.ID}),
+	})
+
+	eng := NewEngine(db).WithProbe(probe.NewFixedProbe(1, 321))
+	sel, err := eng.SelectChannelCtx(context.Background(), RouteInput{Group: "g", Model: "gpt-4o", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if sel.Probe == nil {
+		t.Fatal("Selection.Probe is nil, want populated (a rule references w)")
+	}
+	if sel.Probe.W != 1 || sel.Probe.T != 321 || sel.Probe.Name != "mock" {
+		t.Errorf("probe = %+v, want {1,321,mock}", sel.Probe)
+	}
+
+	// No rule references w/t → probe not invoked → Probe nil.
+	db2 := newEngineTestDB(t)
+	ch2 := mustCreateChannel(t, db2, model.Channel{Name: "c", Models: jsonB(t, []string{"gpt-4o"})})
+	mustCreateRule(t, db2, model.RoutingRule{
+		Name: "plain", Enabled: true, Priority: 1,
+		TargetChannelIDs: jsonB(t, []uint{ch2.ID}),
+	})
+	eng2 := NewEngine(db2).WithProbe(probe.NewFixedProbe(1, 1))
+	sel2, _ := eng2.SelectChannelCtx(context.Background(), RouteInput{Group: "g", Model: "gpt-4o", Prompt: "p"})
+	if sel2.Probe != nil {
+		t.Errorf("Selection.Probe = %+v, want nil (no rule references w/t)", sel2.Probe)
+	}
+}
+
 type countingProbe struct{ calls int }
 
 func (c *countingProbe) Name() string { return "counting" }

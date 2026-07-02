@@ -111,4 +111,10 @@ type RequestLog struct {
 	// AutoMigrate adds these nullable columns; no migrate-time ALTER is needed.
 	RequestBody  *string `gorm:"type:text" json:"request_body,omitempty"`
 	ResponseBody *string `gorm:"type:text" json:"response_body,omitempty"`
+
+	// ProbeInfo is the routing-classifier prediction for this request as JSON
+	// ({"w":..,"t":..,"name":..}), populated only when the probe was actually
+	// invoked (an enabled rule referenced w/t). NULL otherwise. Lets the log
+	// detail show why the request routed the way it did. AutoMigrate adds it.
+	ProbeInfo *string `gorm:"type:text" json:"probe_info,omitempty"`
 }

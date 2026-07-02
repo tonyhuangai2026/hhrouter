@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -72,6 +73,10 @@ type requestContext struct {
 	// feature; serve* sets it before finish() when available. finish() records it
 	// (and the rendered input) only when the RequestLogIO option is on.
 	respText string
+	// probeInfo is the routing-classifier prediction as JSON, set by serve* from
+	// the Selection when the probe ran; finish() records it on the log (always,
+	// independent of the I/O switch, since it's small and diagnostic).
+	probeInfo string
 }
 
 // attempt records the outcome of one candidate-channel attempt for logging.
@@ -226,6 +231,19 @@ func (r *Relayer) routeInput(rc *requestContext, estPrompt int) router.RouteInpu
 	}
 }
 
+// probeInfoJSON marshals the selection's routing-probe prediction to JSON for
+// the request log, or "" when the probe did not run for this request.
+func probeInfoJSON(sel *router.Selection) string {
+	if sel == nil || sel.Probe == nil {
+		return ""
+	}
+	b, err := json.Marshal(sel.Probe)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // serveNonStream runs the non-streaming relay: select candidates, attempt each
 // (failing over on retryable upstream errors), adapt the response back to the
 // inbound format, then log and consume quota.
@@ -237,6 +255,7 @@ func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt i
 		r.failNoChannel(c, rc, err, estPrompt, false, start)
 		return
 	}
+	rc.probeInfo = probeInfoJSON(sel)
 
 	var lastErr error
 	var lastAtt attempt
@@ -420,6 +439,12 @@ func (r *Relayer) finish(rc *requestContext, att attempt, rule *model.RoutingRul
 		out := truncateLog(rc.respText)
 		log.RequestBody = &in
 		log.ResponseBody = &out
+	}
+	// Routing-classifier prediction: recorded whenever the probe ran (small +
+	// diagnostic; not gated by the I/O switch).
+	if rc.probeInfo != "" {
+		pi := rc.probeInfo
+		log.ProbeInfo = &pi
 	}
 
 	_ = r.logs.Write(log)

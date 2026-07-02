@@ -103,6 +103,17 @@ type RouteInput struct {
 	Prompt string
 }
 
+// ProbeResult records what the routing classifier ("small model" probe)
+// predicted for a request, so the relay can log it and the UI can show "this
+// request was routed with w=.., t=..". It is set on the Selection only when the
+// probe was actually invoked (an enabled rule referenced w/t).
+type ProbeResult struct {
+	W    int    `json:"w"`
+	T    int    `json:"t"`
+	Name string `json:"name"`          // probe implementation ("mock" / "http")
+	Err  string `json:"err,omitempty"` // set when the probe call failed (w/t then 0)
+}
+
 // Selection is the result of SelectChannel: an ordered, load-balanced list of
 // candidate channels plus the failover state used to walk it. The relay (T7)
 // drives failover by calling Next repeatedly.
@@ -111,6 +122,9 @@ type Selection struct {
 	Rule *model.RoutingRule
 	// Model is the requested (external) model name.
 	Model string
+	// Probe is the routing-classifier prediction for this request, or nil when the
+	// probe was not invoked (no enabled rule referenced w/t).
+	Probe *ProbeResult
 
 	// candidates is the full load-balanced order: highest-priority bucket first
 	// (its members shuffled by weighted-random), then the remaining buckets in
@@ -226,12 +240,18 @@ func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selectio
 		Int: map[string]int{expr.VarTokens: in.EstTokens},
 		Str: map[string]string{expr.VarGroup: in.Group, expr.VarModel: in.Model},
 	}
+	var probeResult *ProbeResult
 	if needProbe {
 		if p := e.currentProbe(); p != nil {
+			pr := &ProbeResult{Name: p.Name()}
 			if pred, perr := p.Predict(ctx, in.Prompt); perr == nil {
+				pr.W, pr.T = pred.W, pred.T
 				exprVars.Int[expr.VarW] = pred.W
 				exprVars.Int[expr.VarT] = pred.T
+			} else {
+				pr.Err = perr.Error()
 			}
+			probeResult = pr
 		}
 	}
 
@@ -253,6 +273,7 @@ func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selectio
 	return &Selection{
 		Rule:       matched,
 		Model:      in.Model,
+		Probe:      probeResult,
 		candidates: ordered,
 		maxRetries: e.maxRetries(),
 		cursor:     0,

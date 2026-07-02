@@ -76,5 +76,11 @@
     "enabled": "Request I/O logging enabled",
     "disabled": "Request I/O logging disabled",
     "saveFailed": "Failed to update setting"
+  },
+  "probeLog": {
+    "title": "Routing classifier prediction",
+    "w": "w = {{w}} (next turn writes/tool = 1)",
+    "t": "t = {{t}} (predicted output tokens)",
+    "error": "probe failed: {{error}}"
   }
 }

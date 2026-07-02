@@ -34,6 +34,7 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 		r.failNoChannel(c, rc, err, estPrompt, true, start)
 		return
 	}
+	rc.probeInfo = probeInfoJSON(sel)
 
 	var (
 		lastErr error

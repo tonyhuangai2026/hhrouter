@@ -572,12 +572,13 @@ export default function Logs() {
     setLogType('all');
   }, []);
 
-  // Expanded-row detail: the captured input/output (present only when the log-IO
-  // switch was on for that request).
+  // Expanded-row detail: routing-classifier prediction (when the probe ran) and
+  // the captured input/output (when the log-IO switch was on for that request).
   const renderIODetail = useCallback(
     (record) => {
       const inText = record?.request_body || '';
       const outText = record?.response_body || '';
+      const hasIO = !!(record?.request_body || record?.response_body);
       const box = {
         margin: 0,
         padding: '8px 10px',
@@ -590,12 +591,41 @@ export default function Logs() {
         fontFamily: 'var(--semi-font-family-mono, ui-monospace, Menlo, Consolas, monospace)',
         fontSize: 12,
       };
+      // Parse the probe_info JSON ({w,t,name,err}) if present.
+      let probe = null;
+      if (record?.probe_info) {
+        try {
+          probe = JSON.parse(record.probe_info);
+        } catch {
+          probe = null;
+        }
+      }
       return (
         <div style={{ padding: '8px 12px' }}>
-          <Text strong size="small">{t('io.input')}</Text>
-          <pre style={box}>{inText || t('io.empty')}</pre>
-          <Text strong size="small" style={{ display: 'block', marginTop: 8 }}>{t('io.output')}</Text>
-          <pre style={box}>{outText || t('io.empty')}</pre>
+          {probe ? (
+            <div style={{ marginBottom: hasIO ? 12 : 0 }}>
+              <Text strong size="small">{t('probeLog.title')}</Text>
+              <div style={{ marginTop: 4 }}>
+                {probe.err ? (
+                  <Tag color="red" type="light">{t('probeLog.error', { error: probe.err })}</Tag>
+                ) : (
+                  <Space spacing={6} wrap>
+                    <Tag color="violet" type="light">{t('probeLog.w', { w: probe.w })}</Tag>
+                    <Tag color="blue" type="light">{t('probeLog.t', { t: probe.t })}</Tag>
+                    {probe.name ? <Tag size="small">{probe.name}</Tag> : null}
+                  </Space>
+                )}
+              </div>
+            </div>
+          ) : null}
+          {hasIO ? (
+            <>
+              <Text strong size="small">{t('io.input')}</Text>
+              <pre style={box}>{inText || t('io.empty')}</pre>
+              <Text strong size="small" style={{ display: 'block', marginTop: 8 }}>{t('io.output')}</Text>
+              <pre style={box}>{outText || t('io.empty')}</pre>
+            </>
+          ) : null}
         </div>
       );
     },
@@ -744,7 +774,7 @@ export default function Logs() {
             size="middle"
             empty={t('empty.noData')}
             expandedRowRender={renderIODetail}
-            rowExpandable={(r) => !!(r?.request_body || r?.response_body)}
+            rowExpandable={(r) => !!(r?.request_body || r?.response_body || r?.probe_info)}
             pagination={{
               currentPage: logPage,
               pageSize: PAGE_SIZE,
