@@ -55,5 +55,16 @@
   },
   "errors": {
     "loadLogs": "加载日志失败"
+  },
+  "tz": {
+    "label": "时区",
+    "Asia/Shanghai": "中国（UTC+8）",
+    "UTC": "UTC",
+    "local": "浏览器本地",
+    "America/Los_Angeles": "美国太平洋",
+    "America/New_York": "美国东部",
+    "Europe/London": "伦敦",
+    "Asia/Tokyo": "东京（UTC+9）",
+    "Asia/Kolkata": "印度（UTC+5:30）"
   }
 }

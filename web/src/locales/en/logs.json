@@ -55,5 +55,16 @@
   },
   "errors": {
     "loadLogs": "Failed to load logs"
+  },
+  "tz": {
+    "label": "Timezone",
+    "Asia/Shanghai": "China (UTC+8)",
+    "UTC": "UTC",
+    "local": "Browser local",
+    "America/Los_Angeles": "US Pacific",
+    "America/New_York": "US Eastern",
+    "Europe/London": "London",
+    "Asia/Tokyo": "Tokyo (UTC+9)",
+    "Asia/Kolkata": "India (UTC+5:30)"
   }
 }

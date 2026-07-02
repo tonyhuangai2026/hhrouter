@@ -125,6 +125,33 @@ const RANGE_VALUES = ['today', '7d', '30d', 'custom'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 20;
 
+// ---------------------------------------------------------------------------
+// Log-timestamp display timezone. The value is an IANA zone id passed straight
+// to toLocaleString({ timeZone }); "local" means the browser's own zone. The
+// choice is a viewer preference (timestamps are stored in UTC), so it lives in
+// localStorage — no backend involved. Default is China Standard Time (UTC+8).
+// ---------------------------------------------------------------------------
+const TZ_STORAGE_KEY = 'arp_log_tz';
+const DEFAULT_TZ = 'Asia/Shanghai';
+const TZ_VALUES = [
+  'Asia/Shanghai', // UTC+8 (default)
+  'UTC',
+  'local',
+  'America/Los_Angeles',
+  'America/New_York',
+  'Europe/London',
+  'Asia/Tokyo',
+  'Asia/Kolkata',
+];
+
+function loadTz() {
+  try {
+    return localStorage.getItem(TZ_STORAGE_KEY) || DEFAULT_TZ;
+  } catch {
+    return DEFAULT_TZ;
+  }
+}
+
 function presetRange(preset) {
   const end = new Date();
   const start = new Date();
@@ -182,6 +209,21 @@ export default function Logs() {
   const [userId, setUserId] = useState(undefined); // admin only
   // Type filter: 'all' (default), 'prod' (is_test=false) or 'test' (is_test=true).
   const [logType, setLogType] = useState('all');
+
+  // Display timezone for log timestamps (viewer preference, persisted locally).
+  const [tz, setTz] = useState(loadTz);
+  const changeTz = useCallback((v) => {
+    setTz(v);
+    try {
+      localStorage.setItem(TZ_STORAGE_KEY, v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const tzOptions = useMemo(
+    () => TZ_VALUES.map((value) => ({ value, label: t(`tz.${value}`, { defaultValue: value }) })),
+    [t]
+  );
 
   // Data.
   const [logs, setLogs] = useState([]);
@@ -317,13 +359,17 @@ export default function Logs() {
           if (ts == null) return '-';
           const d = new Date(ts);
           if (Number.isNaN(d.getTime())) return String(ts);
-          const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          // Render in the selected timezone ('local' → omit timeZone so the
+          // browser zone is used). Timestamps are stored in UTC.
+          const zoneOpt = tz && tz !== 'local' ? { timeZone: tz } : {};
+          const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...zoneOpt });
           // Show seconds — request timing to the second was requested for debugging
           // bursty/tool-call traffic where multiple requests share the same minute.
           const clock = d.toLocaleTimeString(undefined, {
             hour: '2-digit',
             minute: '2-digit',
             second: '2-digit',
+            ...zoneOpt,
           });
           return (
             <div>
@@ -495,7 +541,7 @@ export default function Logs() {
       }
     );
     return cols;
-  }, [isAdmin, t]);
+  }, [isAdmin, t, tz]);
 
   const resetFilters = useCallback(() => {
     setChannelId(undefined);
@@ -590,6 +636,19 @@ export default function Logs() {
               onChange={setLogType}
               optionList={logTypeOptions}
               style={{ width: 120 }}
+            />
+          </Space>
+
+          <Space align="center">
+            <Text type="tertiary" size="small">
+              {t('tz.label')}
+            </Text>
+            <Select
+              value={tz}
+              onChange={changeTz}
+              optionList={tzOptions}
+              style={{ width: 180 }}
+              filter
             />
           </Space>
 
