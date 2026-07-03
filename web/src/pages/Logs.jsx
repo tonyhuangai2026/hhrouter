@@ -548,15 +548,27 @@ export default function Logs() {
         title: t('columns.status'),
         dataIndex: 'status',
         width: 130,
+        width: 240,
         render: (s, r) => {
           const ok = s === 'success';
           const http = r.http_status ?? r.httpStatus;
           const label = s || t('statusUnknown');
+          const err = r.error_message ?? r.errorMessage;
           return (
-            <Tag color={ok ? 'green' : 'red'} type="light" prefixIcon={<span className="lg-dot" style={{ background: ok ? 'var(--semi-color-success)' : 'var(--semi-color-danger)', marginRight: 0 }} />}>
-              <span style={{ fontWeight: 600 }}>{label}</span>
-              {http ? <span className="lg-mono" style={{ marginLeft: 6, opacity: 0.85 }}>{http}</span> : null}
-            </Tag>
+            <div>
+              <Tag color={ok ? 'green' : 'red'} type="light" prefixIcon={<span className="lg-dot" style={{ background: ok ? 'var(--semi-color-success)' : 'var(--semi-color-danger)', marginRight: 0 }} />}>
+                <span style={{ fontWeight: 600 }}>{label}</span>
+                {http ? <span className="lg-mono" style={{ marginLeft: 6, opacity: 0.85 }}>{http}</span> : null}
+              </Tag>
+              {!ok && err ? (
+                <Tooltip content={err}>
+                  <div style={{ color: 'var(--semi-color-danger)', fontSize: 12, lineHeight: 1.35, marginTop: 4,
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {err}
+                  </div>
+                </Tooltip>
+              ) : null}
+            </div>
           );
         },
       }
@@ -636,7 +648,7 @@ export default function Logs() {
     <div className="lg-page">
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 4 }}>
         <Title heading={2}>{t('title')}</Title>
-        <Button icon={<IconRefresh />} onClick={() => loadLogs(logPage)}>
+        <Button icon={<IconRefresh />} loading={logLoading} onClick={() => loadLogs(logPage || 1)}>
           {t('actions.refresh')}
         </Button>
       </Space>

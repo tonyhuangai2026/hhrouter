@@ -69,10 +69,13 @@ type requestContext struct {
 	token     *model.Token
 	user      *model.User
 
-	// respText is the assistant output text captured for the request-log I/O
-	// feature; serve* sets it before finish() when available. finish() records it
-	// (and the rendered input) only when the RequestLogIO option is on.
-	respText string
+	// reqBodyRaw is the verbatim inbound request JSON (as the client sent it),
+	// captured by the handler. respBodyRaw is the verbatim response JSON the relay
+	// returns. Both are recorded on the log — as-is, unparsed — when the
+	// RequestLogIO option is on. For a stream, respBodyRaw holds the assembled
+	// completion text (no single response object exists).
+	reqBodyRaw  string
+	respBodyRaw string
 	// probeInfo is the routing-classifier prediction as JSON, set by serve* from
 	// the Selection when the probe ran; finish() records it on the log (always,
 	// independent of the I/O switch, since it's small and diagnostic).
@@ -87,8 +90,9 @@ type attempt struct {
 
 // HandleChatCompletions handles POST /v1/chat/completions (OpenAI inbound).
 func (r *Relayer) HandleChatCompletions(c *gin.Context) {
+	raw, _ := c.GetRawData() // capture the verbatim body (consumes c.Request.Body)
 	var in adapter.OpenAIChatInbound
-	if err := c.ShouldBindJSON(&in); err != nil {
+	if err := json.Unmarshal(raw, &in); err != nil {
 		WriteClassError(c, FormatOpenAI, http.StatusBadRequest, ClassInvalidRequest, "invalid request body: "+err.Error())
 		return
 	}
@@ -97,13 +101,14 @@ func (r *Relayer) HandleChatCompletions(c *gin.Context) {
 		return
 	}
 	uni := adapter.ParseOpenAIRequest(in)
-	r.handle(c, FormatOpenAI, uni)
+	r.handle(c, FormatOpenAI, uni, raw)
 }
 
 // HandleMessages handles POST /v1/messages (Anthropic Messages inbound).
 func (r *Relayer) HandleMessages(c *gin.Context) {
+	raw, _ := c.GetRawData()
 	var in adapter.AnthropicInbound
-	if err := c.ShouldBindJSON(&in); err != nil {
+	if err := json.Unmarshal(raw, &in); err != nil {
 		WriteClassError(c, FormatAnthropic, http.StatusBadRequest, ClassInvalidRequest, "invalid request body: "+err.Error())
 		return
 	}
@@ -112,12 +117,12 @@ func (r *Relayer) HandleMessages(c *gin.Context) {
 		return
 	}
 	uni := adapter.ParseAnthropicRequest(in)
-	r.handle(c, FormatAnthropic, uni)
+	r.handle(c, FormatAnthropic, uni, raw)
 }
 
 // handle is the shared entry that resolves identity, runs the precise pre-flight
 // quota admission, and dispatches to the streaming or non-streaming path.
-func (r *Relayer) handle(c *gin.Context, format InboundFormat, uni adapter.UnifiedRequest) {
+func (r *Relayer) handle(c *gin.Context, format InboundFormat, uni adapter.UnifiedRequest, rawBody []byte) {
 	tok, ok := tokenFromCtx(c)
 	if !ok {
 		WriteClassError(c, format, http.StatusUnauthorized, ClassAuthentication, "authentication required")
@@ -146,11 +151,12 @@ func (r *Relayer) handle(c *gin.Context, format InboundFormat, uni adapter.Unifi
 	// before the body is parsed.
 
 	rc := &requestContext{
-		format:    format,
-		outFormat: outFormatFor(format, tok.OutputFormat), // key override or mirror endpoint
-		uni:       uni,
-		token:     tok,
-		user:      user,
+		format:     format,
+		outFormat:  outFormatFor(format, tok.OutputFormat), // key override or mirror endpoint
+		uni:        uni,
+		token:      tok,
+		user:       user,
+		reqBodyRaw: string(rawBody),
 	}
 	if uni.Stream {
 		r.serveStream(c, rc, estPrompt)
@@ -322,7 +328,10 @@ func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt i
 		body := buildResponse(rc.outFormat, uniResp)
 		c.JSON(http.StatusOK, body)
 
-		rc.respText = uniResp.Text() // captured for optional request-log I/O
+		// Capture the verbatim response JSON for optional request-log I/O.
+		if b, mErr := json.Marshal(body); mErr == nil {
+			rc.respBodyRaw = string(b)
+		}
 		prompt, completion, total := usageTokens(usage, estPrompt)
 		r.finish(rc, lastAtt, sel.Rule, model.LogSuccess, http.StatusOK, "",
 			prompt, completion, total, false, time.Since(start), nil, &billing{price: price, usage: usage})
@@ -432,11 +441,13 @@ func (r *Relayer) finish(rc *requestContext, att attempt, rule *model.RoutingRul
 		cost = r.pricing.Cost(bill.price, bill.usage)
 		log.CostMicroUSD = &cost
 	}
-	// Optional I/O capture: record the rendered input + assistant output when the
-	// RequestLogIO switch is on (admin opt-in, off by default).
+	// Optional I/O capture: record the VERBATIM inbound request JSON + the response
+	// JSON (unparsed), when the RequestLogIO switch is on (admin opt-in, off by
+	// default). Raw JSON is kept as-is so the log shows exactly what was sent /
+	// returned, not a flattened transcript.
 	if r.requestLogIOEnabled() {
-		in := truncateLog(renderInboundText(rc.uni))
-		out := truncateLog(rc.respText)
+		in := truncateLog(rc.reqBodyRaw)
+		out := truncateLog(rc.respBodyRaw)
 		log.RequestBody = &in
 		log.ResponseBody = &out
 	}
