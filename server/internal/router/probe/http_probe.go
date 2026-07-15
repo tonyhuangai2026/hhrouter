@@ -50,7 +50,7 @@ func (h *HTTPProbe) Name() string { return "http" }
 // prompt. An upstream simply ignores the field it doesn't use.
 type chatRequest struct {
 	Model       string        `json:"model"`
-	Prompt      string        `json:"prompt"`
+	Prompt      string        `json:"prompt,omitempty"`
 	Messages    []chatMessage `json:"messages"`
 	MaxTokens   int           `json:"max_tokens"`
 	Temperature float64       `json:"temperature"`
@@ -82,13 +82,22 @@ type probeResponse struct {
 // Predict implements Probe by POSTing the prompt to the proxy and parsing the
 // {w,t} JSON embedded in the response content.
 func (h *HTTPProbe) Predict(ctx context.Context, prompt string) (Prediction, error) {
-	body, _ := json.Marshal(chatRequest{
+	// The prompt appears in the OpenAI-style `messages` (what the vLLM endpoint
+	// actually consumes) always. It is ALSO mirrored into the top-level `prompt`
+	// field for Lambda-proxy upstreams that read that shape — but ONLY for small
+	// prompts. Duplicating a large prompt would double the request body and can
+	// trip an upstream body-size limit (nginx 413); a proxy that needs `prompt`
+	// only does so for short diagnostic calls, so this costs nothing in practice.
+	reqBody := chatRequest{
 		Model:       servedModel,
-		Prompt:      prompt,
 		Messages:    []chatMessage{{Role: "user", Content: prompt}},
 		MaxTokens:   16,
 		Temperature: 0,
-	})
+	}
+	if len(prompt) <= 2000 {
+		reqBody.Prompt = prompt
+	}
+	body, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url, bytes.NewReader(body))
 	if err != nil {
 		return Prediction{}, err

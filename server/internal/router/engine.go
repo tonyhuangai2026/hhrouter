@@ -159,28 +159,93 @@ func (s *Selection) Next() (*model.Channel, error) {
 	return &ch, nil
 }
 
+// Probe prompt size limits (characters). The classifier was trained with an
+// 8192-token cap and prompts up to ~20.7k chars; a request far larger than that
+// is both out-of-distribution AND gets rejected before the model even sees it
+// (nginx 413 in front of the endpoint, then vLLM's max-model-len). We therefore
+// bound the rendered prompt on the CLIENT side:
+//   - maxProbePromptChars caps the whole prompt, keeping the most RECENT turns
+//     (the write/tool signal lives in the last tool_use/tool_result, not deep
+//     history), while always retaining the trailing open assistant turn.
+//   - maxProbeTurnChars caps any single oversized turn (e.g. a huge tool_result
+//     dump); the middle is elided with an "…[truncated]" marker, matching the
+//     "[truncated]" convention present in the training data.
+const (
+	maxProbePromptChars = 16000
+	maxProbeTurnChars   = 4000
+)
+
 // RenderProbePrompt renders a conversation (role/text pairs, oldest first) into
 // the single-string form the routing classifier expects — the Qwen chat-template
 // layout from the API reference: each turn wrapped as
 // "<|im_start|>{role}\n{text}<|im_end|>\n", ending with an open assistant turn
 // "<|im_start|>assistant\n" so the classifier predicts the NEXT assistant turn.
 // system text (if any) is prepended as a leading system turn.
+//
+// The result is size-bounded (see maxProbePromptChars): oversized single turns
+// are truncated in the middle, and if the whole conversation still exceeds the
+// budget the OLDEST turns are dropped first so the most recent context — where
+// the routing signal is — is preserved.
 func RenderProbePrompt(system string, turns []struct{ Role, Text string }) string {
-	var b strings.Builder
+	const suffix = "<|im_start|>assistant\n"
+
+	// Render one turn, truncating its content if it alone is too large.
+	renderTurn := func(role, text string) string {
+		return "<|im_start|>" + role + "\n" + truncateMiddle(text, maxProbeTurnChars) + "<|im_end|>\n"
+	}
+
+	var head string
 	if strings.TrimSpace(system) != "" {
-		b.WriteString("<|im_start|>system\n")
-		b.WriteString(system)
-		b.WriteString("<|im_end|>\n")
+		head = "<|im_start|>system\n" + truncateMiddle(system, maxProbeTurnChars) + "<|im_end|>\n"
 	}
-	for _, t := range turns {
-		b.WriteString("<|im_start|>")
-		b.WriteString(t.Role)
-		b.WriteString("\n")
-		b.WriteString(t.Text)
-		b.WriteString("<|im_end|>\n")
+
+	// Budget left for turns after reserving the trailing assistant marker. The
+	// system turn competes for the same budget but is lower priority than recent
+	// turns, so we add turns newest-first and only then prepend the system head if
+	// it still fits.
+	budget := maxProbePromptChars - len(suffix)
+
+	// Walk turns newest → oldest, prepending each while it fits.
+	rendered := make([]string, 0, len(turns))
+	used := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		seg := renderTurn(turns[i].Role, turns[i].Text)
+		if used+len(seg) > budget && len(rendered) > 0 {
+			break // keep what we have; drop older turns
+		}
+		rendered = append(rendered, seg)
+		used += len(seg)
 	}
-	b.WriteString("<|im_start|>assistant\n")
+	// rendered is newest-first; reverse to chronological order.
+	var b strings.Builder
+	if head != "" && used+len(head) <= budget {
+		b.WriteString(head)
+	}
+	for i := len(rendered) - 1; i >= 0; i-- {
+		b.WriteString(rendered[i])
+	}
+	b.WriteString(suffix)
 	return b.String()
+}
+
+// truncateMiddle returns s unchanged when it fits in max characters; otherwise it
+// keeps the head and tail and elides the middle with an "…[truncated]…" marker.
+// Both ends are retained because a tool_result's shape (start) and its outcome
+// (end) can both carry signal. max is a character budget (not bytes); it operates
+// on runes so multibyte text is never split.
+func truncateMiddle(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	const marker = "…[truncated]…"
+	keep := max - len([]rune(marker))
+	if keep < 2 {
+		return string(r[:max])
+	}
+	headN := keep / 2
+	tailN := keep - headN
+	return string(r[:headN]) + marker + string(r[len(r)-tailN:])
 }
 
 // UpstreamModel resolves the upstream model id for a channel, honouring its
