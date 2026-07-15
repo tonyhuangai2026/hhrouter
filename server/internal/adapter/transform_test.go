@@ -480,3 +480,56 @@ func TestDescribeRequest(t *testing.T) {
 		t.Error("describeRequest returned empty")
 	}
 }
+
+// ---- Bedrock tool_result content shaping (regression: array under json 400) ----
+
+// TestBedrockToolResultContent_AnthropicArray verifies that an Anthropic-shaped
+// tool_result content array [{"type":"text",...}] is unpacked into per-element
+// {text} sub-blocks, NOT dumped whole under {json} (which Bedrock rejects with
+// "Provide a json object for the field").
+func TestBedrockToolResultContent_AnthropicArray(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"text","text":"result A"},{"type":"text","text":"result B"}]`)
+	got, err := bedrockToolResultContent(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 sub-blocks, got %d: %v", len(got), got)
+	}
+	for i, want := range []string{"result A", "result B"} {
+		if _, isJSON := got[i]["json"]; isJSON {
+			t.Fatalf("sub-block %d used json for a text array element: %v", i, got[i])
+		}
+		if got[i]["text"] != want {
+			t.Fatalf("sub-block %d text = %v, want %q", i, got[i]["text"], want)
+		}
+	}
+}
+
+// TestBedrockToolResultContent_JSONObject keeps the valid {json} path: a bare
+// JSON object is a legal Bedrock json sub-block value.
+func TestBedrockToolResultContent_JSONObject(t *testing.T) {
+	raw := json.RawMessage(`{"ok":true,"n":3}`)
+	got, err := bedrockToolResultContent(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 sub-block, got %d", len(got))
+	}
+	if _, ok := got[0]["json"]; !ok {
+		t.Fatalf("object should map to a json sub-block, got %v", got[0])
+	}
+}
+
+// TestBedrockToolResultContent_PlainString maps a plain string to a text sub-block.
+func TestBedrockToolResultContent_PlainString(t *testing.T) {
+	raw := json.RawMessage(`"just text"`)
+	got, err := bedrockToolResultContent(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0]["text"] != "just text" {
+		t.Fatalf("want single text sub-block, got %v", got)
+	}
+}

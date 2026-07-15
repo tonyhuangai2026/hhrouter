@@ -867,9 +867,13 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 				continue
 			}
 			if c.IsToolResult() {
+				trContent, err := bedrockToolResultContent(ctx, c.ToolResult.Content)
+				if err != nil {
+					return bedrockConverseRequest{}, err
+				}
 				blocks = append(blocks, bedrockContentBlock{ToolResult: &bedrockToolResultBlock{
 					ToolUseID: c.ToolResult.ToolUseID,
-					Content:   bedrockToolResultContent(c.ToolResult.Content),
+					Content:   trContent,
 				}})
 				continue
 			}
@@ -900,22 +904,81 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 }
 
 // bedrockToolResultContent renders a canonical tool_result content (raw JSON)
-// into Bedrock's toolResult.content list. A JSON object/array becomes a {json:…}
-// sub-block; a JSON string (or anything else) becomes a {text:…} sub-block —
-// matching Converse's accepted toolResult content shapes.
-func bedrockToolResultContent(raw json.RawMessage) []map[string]any {
+// into Bedrock's toolResult.content list. Converse is strict about each sub-block:
+// a {json:…} sub-block's value MUST be a JSON OBJECT (not an array/string/number),
+// and a {text:…} sub-block's value must be a string. Getting this wrong yields the
+// 400 "The format of the value at messages.N.content.M.toolResult.content.K.json
+// is invalid. Provide a json object for the field."
+//
+// The canonical (Anthropic-shaped) tool_result content can be any of:
+//   - a plain string                       → one {text} sub-block
+//   - a JSON object                        → one {json} sub-block (object is valid)
+//   - an Anthropic content-block ARRAY,
+//     e.g. [{"type":"text","text":"..."}]  → one sub-block PER element, unpacked
+//     to {text}/{image}/{json} by block type (this is the common Anthropic shape,
+//     and the source of the reported bug: an array must NOT be dumped under json)
+//   - a bare JSON array of non-blocks       → {json} per element that is an object,
+//     else {text} of that element's JSON
+//
+// ctx bounds any image downloads (url image blocks inside a tool result).
+func bedrockToolResultContent(ctx context.Context, raw json.RawMessage) ([]map[string]any, error) {
 	s := strings.TrimSpace(string(raw))
 	if s == "" {
-		return []map[string]any{{"text": ""}}
+		return []map[string]any{{"text": ""}}, nil
 	}
+	// Plain string → text.
 	var str string
 	if err := json.Unmarshal(raw, &str); err == nil {
-		return []map[string]any{{"text": str}}
+		return []map[string]any{{"text": str}}, nil
 	}
-	if s[0] == '{' || s[0] == '[' {
-		return []map[string]any{{"json": json.RawMessage(raw)}}
+	// Array: treat each element as an Anthropic content block and unpack.
+	if s[0] == '[' {
+		var blocks []anthropicInboundBlock
+		if err := json.Unmarshal(raw, &blocks); err == nil {
+			out := make([]map[string]any, 0, len(blocks))
+			for _, b := range blocks {
+				switch b.Type {
+				case "text", "":
+					// A well-formed text block, or a typeless {"text":...}.
+					if b.Text != "" || b.Type == "text" {
+						out = append(out, map[string]any{"text": b.Text})
+					}
+				case "image":
+					if b.Source == nil {
+						continue
+					}
+					var cb ContentBlock
+					switch b.Source.Type {
+					case "url":
+						cb = ImageURLBlock(b.Source.URL)
+					default:
+						cb = ImageBase64Block(b.Source.MediaType, b.Source.Data)
+					}
+					img, err := bedrockImageFromSource(ctx, cb.Image)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, map[string]any{"image": img})
+				default:
+					// Unknown block type: fall back to embedding the raw element.
+					out = append(out, map[string]any{"text": b.Text})
+				}
+			}
+			if len(out) == 0 {
+				return []map[string]any{{"text": ""}}, nil
+			}
+			return out, nil
+		}
+		// Not an array of content blocks — wrap the whole array's items. Bedrock
+		// json must be an object, so a bare array can't go under json; stringify.
+		return []map[string]any{{"text": s}}, nil
 	}
-	return []map[string]any{{"text": s}}
+	// JSON object → json sub-block (valid: json requires an object).
+	if s[0] == '{' {
+		return []map[string]any{{"json": json.RawMessage(raw)}}, nil
+	}
+	// Any other scalar (number/bool/null) → text of its literal.
+	return []map[string]any{{"text": s}}, nil
 }
 
 // canonicalToolsToBedrock converts the canonical (Anthropic-shaped) tools array
