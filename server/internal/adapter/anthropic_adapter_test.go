@@ -342,3 +342,57 @@ func TestAnthropicAdapter_BuildRequest_NoToolsWhenNoHistory(t *testing.T) {
 		t.Fatalf("no history tools → body.Tools should be empty, got %s", body.Tools)
 	}
 }
+
+// TestAnthropicAdapter_BuildRequest_EmptyToolsArray verifies the goal-mode shape:
+// tools:[] with tool history is reconstructed (not forwarded as []).
+func TestAnthropicAdapter_BuildRequest_EmptyToolsArray(t *testing.T) {
+	a := NewAnthropicAdapter(stubDecryptor{key: "k"})
+	ch := &model.Channel{Type: model.ChannelAnthropic, BaseURL: "https://gw.example/"}
+	uni := UnifiedRequest{
+		Model: "claude-sonnet-4-6",
+		Tools: json.RawMessage(`[]`),
+		Messages: []Message{
+			{Role: RoleAssistant, Content: []ContentBlock{
+				ToolUseBlockOf("t1", "get_weather", json.RawMessage(`{"city":"P"}`)),
+			}},
+			{Role: RoleUser, Content: []ContentBlock{
+				ToolResultBlockOf("t1", json.RawMessage(`[{"type":"text","text":"18C"}]`), false),
+			}},
+		},
+	}
+	req, err := a.BuildRequest(context.Background(), uni, ch)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	var body anthropicOutboundRequest
+	if err := json.Unmarshal(readBody(t, req), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var tools []struct{ Name string `json:"name"` }
+	if err := json.Unmarshal(body.Tools, &tools); err != nil || len(tools) != 1 || tools[0].Name != "get_weather" {
+		t.Fatalf("tools:[] not reconstructed; body.Tools=%s err=%v", body.Tools, err)
+	}
+}
+
+// TestAnthropicAdapter_BuildRequest_EmptyToolsNoHistory ensures tools:[] with NO
+// tool history results in an omitted tools field (not a forwarded []).
+func TestAnthropicAdapter_BuildRequest_EmptyToolsNoHistory(t *testing.T) {
+	a := NewAnthropicAdapter(stubDecryptor{key: "k"})
+	ch := &model.Channel{Type: model.ChannelAnthropic, BaseURL: "https://gw.example/"}
+	uni := UnifiedRequest{
+		Model:    "claude-sonnet-4-6",
+		Tools:    json.RawMessage(`[]`),
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}}},
+	}
+	req, err := a.BuildRequest(context.Background(), uni, ch)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	var body anthropicOutboundRequest
+	if err := json.Unmarshal(readBody(t, req), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Tools) != 0 {
+		t.Fatalf("expected tools omitted, got %s", body.Tools)
+	}
+}

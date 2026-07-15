@@ -174,10 +174,12 @@ func (a *AnthropicAdapter) BuildRequest(ctx context.Context, uni UnifiedRequest,
 	// the history in that case so the request is accepted; this doesn't change
 	// behavior on a turn that isn't requesting a new tool call.
 	tools := uni.Tools
-	if len(strings.TrimSpace(string(tools))) == 0 {
-		if recon := ReconstructCanonicalToolsFromHistory(uni.Messages); recon != nil {
-			tools = recon
-		}
+	if toolsEffectivelyEmpty(tools) {
+		// Reconstruct from history when there are tool blocks; otherwise drop the
+		// field entirely (nil) — never forward an empty `tools:[]`, which Claude
+		// Code's goal mode sends and which itself triggers TOOL_CONFIG_MISSING
+		// downstream when the history has tool_use/tool_result blocks.
+		tools = ReconstructCanonicalToolsFromHistory(uni.Messages)
 	}
 
 	body := anthropicOutboundRequest{

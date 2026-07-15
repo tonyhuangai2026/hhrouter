@@ -624,3 +624,46 @@ func TestReconstructCanonicalToolsFromHistory_None(t *testing.T) {
 		t.Fatalf("expected nil, got %s", raw)
 	}
 }
+
+// TestToolsEffectivelyEmpty covers the goal-mode empty-array case plus the other
+// "no tools" shapes.
+func TestToolsEffectivelyEmpty(t *testing.T) {
+	cases := map[string]bool{
+		``:                        true,
+		`  `:                      true,
+		`null`:                    true,
+		`[]`:                      true,
+		`[ ]`:                     true,
+		`[{"name":"x"}]`:          false,
+		`{"not":"an array"}`:      false,
+	}
+	for in, want := range cases {
+		if got := toolsEffectivelyEmpty(json.RawMessage(in)); got != want {
+			t.Errorf("toolsEffectivelyEmpty(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestUnifiedToBedrock_EmptyToolsArrayReconstructs verifies tools:[] with tool
+// history still yields a toolConfig (the goal-mode bug on the bedrock path).
+func TestUnifiedToBedrock_EmptyToolsArrayReconstructs(t *testing.T) {
+	uni := UnifiedRequest{
+		Model: "claude-sonnet-4-6",
+		Tools: json.RawMessage(`[]`), // goal mode sends an empty array
+		Messages: []Message{
+			{Role: RoleAssistant, Content: []ContentBlock{
+				ToolUseBlockOf("t1", "get_weather", json.RawMessage(`{"city":"P"}`)),
+			}},
+			{Role: RoleUser, Content: []ContentBlock{
+				ToolResultBlockOf("t1", json.RawMessage(`[{"type":"text","text":"18C"}]`), false),
+			}},
+		},
+	}
+	out, err := unifiedToBedrock(context.Background(), uni)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if out.ToolConfig == nil {
+		t.Fatal("tools:[] + tool history must still produce a toolConfig")
+	}
+}

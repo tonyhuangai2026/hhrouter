@@ -942,6 +942,28 @@ func reconstructToolConfigFromHistory(messages []Message) *bedrockToolConfig {
 	return cfg
 }
 
+// toolsEffectivelyEmpty reports whether a raw canonical `tools` value carries no
+// usable tool definitions. This is true for an absent field, whitespace, JSON
+// null, AND an empty array `[]` — the last one matters because Claude Code's
+// "goal" mode sends `"tools": []` (rather than omitting the field) on follow-up
+// turns. An empty array is NOT the same as "tools present": forwarding `tools:[]`
+// alongside tool_use/tool_result history still makes Bedrock reject the request
+// with TOOL_CONFIG_MISSING, so callers must treat it as empty and reconstruct.
+func toolsEffectivelyEmpty(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return true
+	}
+	// Cheap check for an empty array in any whitespace form, e.g. "[]" or "[ ]".
+	if s[0] == '[' {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(raw, &arr); err == nil && len(arr) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ReconstructCanonicalToolsFromHistory builds a canonical (Anthropic-shaped)
 // tools array — [{"name":..,"description":..,"input_schema":{"type":"object"}}] —
 // from the distinct tool_use blocks in a conversation. It is the format-agnostic
@@ -1061,7 +1083,7 @@ func bedrockToolResultContent(ctx context.Context, raw json.RawMessage) ([]map[s
 // canonicalToolsToBedrock converts the canonical (Anthropic-shaped) tools array
 // and tool_choice into a Bedrock toolConfig. Returns nil when there are no tools.
 func canonicalToolsToBedrock(toolsRaw, choiceRaw json.RawMessage) *bedrockToolConfig {
-	if len(strings.TrimSpace(string(toolsRaw))) == 0 {
+	if toolsEffectivelyEmpty(toolsRaw) {
 		return nil
 	}
 	var tools []struct {
