@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/agent-router/server/internal/model"
 )
@@ -203,6 +204,55 @@ func (m Message) Text() string {
 			b = append(b, '\n')
 		}
 		b = append(b, c.Text...)
+	}
+	return string(b)
+}
+
+// ProbeText renders the message for the routing classifier (small-model probe).
+// Unlike Text(), which drops tool_use / tool_result blocks entirely, this
+// reproduces the exact textual markers the probe was TRAINED on, so the model can
+// see the tool-calling signal that drives the write-flag (w) prediction:
+//
+//   - text block        → the text verbatim
+//   - tool_use block     → `[tool_use] {"input":<args>,"name":"<tool>"}`
+//     (key order input-then-name matches the training data)
+//   - tool_result block  → `[tool_result] <content>`
+//
+// Blocks are joined with newlines in their original order. Without this, an
+// assistant turn that only called a tool (no prose) rendered to an empty string
+// and the probe never saw any tool activity — so it predicted w=0 for every
+// tool-using conversation. See engine.RenderProbePrompt for the surrounding
+// <|im_start|> framing.
+func (m Message) ProbeText() string {
+	parts := make([]string, 0, len(m.Content))
+	for _, c := range m.Content {
+		switch {
+		case c.IsToolUse():
+			input := strings.TrimSpace(string(c.ToolUse.Input))
+			if input == "" {
+				input = "{}"
+			}
+			// Compose with input first, then name, matching the training render.
+			parts = append(parts, `[tool_use] {"input":`+input+`,"name":`+strconvQuote(c.ToolUse.Name)+`}`)
+		case c.IsToolResult():
+			content := strings.TrimSpace(string(c.ToolResult.Content))
+			if content == "" {
+				content = `""`
+			}
+			parts = append(parts, "[tool_result] "+content)
+		case c.Text != "":
+			parts = append(parts, c.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// strconvQuote returns the JSON-quoted form of s (a minimal, allocation-light
+// wrapper so ProbeText can emit a valid JSON string for the tool name).
+func strconvQuote(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return `""`
 	}
 	return string(b)
 }

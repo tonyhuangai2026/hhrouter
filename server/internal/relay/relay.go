@@ -227,7 +227,10 @@ func formatMicroUSD(micro int64) string {
 func (r *Relayer) routeInput(rc *requestContext, estPrompt int) router.RouteInput {
 	turns := make([]struct{ Role, Text string }, 0, len(rc.uni.Messages))
 	for _, m := range rc.uni.Messages {
-		turns = append(turns, struct{ Role, Text string }{Role: m.Role, Text: m.Text()})
+		// ProbeText (not Text): preserves tool_use / tool_result markers so the
+		// classifier sees the tool-calling signal it was trained on. Text() drops
+		// those blocks, which made the probe predict w=0 for every tool-using turn.
+		turns = append(turns, struct{ Role, Text string }{Role: m.Role, Text: m.ProbeText()})
 	}
 	return router.RouteInput{
 		Group:     rc.token.Group,
