@@ -900,7 +900,46 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 		}
 	}
 	out.ToolConfig = canonicalToolsToBedrock(uni.Tools, uni.ToolChoice)
+	// Bedrock requires toolConfig to be defined whenever the conversation contains
+	// any toolUse/toolResult content block — even on a follow-up request that no
+	// longer sends the `tools` list (e.g. Claude Code's Stop-hook call reusing a
+	// history that has tool blocks). Without it Bedrock rejects with
+	// TOOL_CONFIG_MISSING. When the request itself declared no tools but the
+	// history references some, synthesize a minimal toolConfig from the tool_use
+	// blocks' names so the request is accepted; this does not change model behavior
+	// on a turn that isn't asking for a new tool call.
+	if out.ToolConfig == nil {
+		if cfg := reconstructToolConfigFromHistory(uni.Messages); cfg != nil {
+			out.ToolConfig = cfg
+		}
+	}
 	return out, nil
+}
+
+// reconstructToolConfigFromHistory builds a minimal Bedrock toolConfig from the
+// tool_use blocks present in a conversation, used only as a fallback when the
+// request carried no `tools` field but its history contains tool blocks (Bedrock
+// then demands a toolConfig). Each distinct tool name becomes a toolSpec with a
+// permissive object schema. Returns nil if there are no tool_use blocks.
+func reconstructToolConfigFromHistory(messages []Message) *bedrockToolConfig {
+	seen := map[string]bool{}
+	var cfg *bedrockToolConfig
+	for _, m := range messages {
+		for _, c := range m.Content {
+			if !c.IsToolUse() || c.ToolUse.Name == "" || seen[c.ToolUse.Name] {
+				continue
+			}
+			seen[c.ToolUse.Name] = true
+			if cfg == nil {
+				cfg = &bedrockToolConfig{}
+			}
+			cfg.Tools = append(cfg.Tools, bedrockTool{ToolSpec: bedrockToolSpec{
+				Name:        c.ToolUse.Name,
+				InputSchema: map[string]any{"json": map[string]any{"type": "object"}},
+			}})
+		}
+	}
+	return cfg
 }
 
 // bedrockToolResultContent renders a canonical tool_result content (raw JSON)

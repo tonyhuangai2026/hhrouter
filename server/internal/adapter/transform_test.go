@@ -533,3 +533,49 @@ func TestBedrockToolResultContent_PlainString(t *testing.T) {
 		t.Fatalf("want single text sub-block, got %v", got)
 	}
 }
+
+// TestUnifiedToBedrock_ReconstructToolConfig verifies that when a request carries
+// NO tools field but its message history contains tool_use/tool_result blocks,
+// unifiedToBedrock synthesizes a toolConfig — otherwise Bedrock rejects with
+// TOOL_CONFIG_MISSING. (Reproduces Claude Code's Stop-hook follow-up call.)
+func TestUnifiedToBedrock_ReconstructToolConfig(t *testing.T) {
+	uni := UnifiedRequest{
+		Model: "claude-sonnet-4-6",
+		// NOTE: no Tools field.
+		Messages: []Message{
+			{Role: RoleUser, Content: []ContentBlock{TextBlock("weather in Paris?")}},
+			{Role: RoleAssistant, Content: []ContentBlock{
+				ToolUseBlockOf("toolu_1", "get_weather", json.RawMessage(`{"city":"Paris"}`)),
+			}},
+			{Role: RoleUser, Content: []ContentBlock{
+				ToolResultBlockOf("toolu_1", json.RawMessage(`[{"type":"text","text":"18C"}]`), false),
+			}},
+		},
+	}
+	out, err := unifiedToBedrock(context.Background(), uni)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.ToolConfig == nil {
+		t.Fatal("toolConfig must be reconstructed from history tool blocks, got nil")
+	}
+	if len(out.ToolConfig.Tools) != 1 || out.ToolConfig.Tools[0].ToolSpec.Name != "get_weather" {
+		t.Fatalf("want a single get_weather toolSpec, got %+v", out.ToolConfig.Tools)
+	}
+}
+
+// TestUnifiedToBedrock_NoToolConfigWhenNoToolBlocks ensures the reconstruction
+// fallback does NOT fire for ordinary tool-free conversations.
+func TestUnifiedToBedrock_NoToolConfigWhenNoToolBlocks(t *testing.T) {
+	uni := UnifiedRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hello")}}},
+	}
+	out, err := unifiedToBedrock(context.Background(), uni)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.ToolConfig != nil {
+		t.Fatalf("no tool blocks → toolConfig should stay nil, got %+v", out.ToolConfig)
+	}
+}
