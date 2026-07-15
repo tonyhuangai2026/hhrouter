@@ -167,6 +167,19 @@ func (a *AnthropicAdapter) BuildRequest(ctx context.Context, uni UnifiedRequest,
 		})
 	}
 
+	// Tools are forwarded verbatim. But when the request omits `tools` while its
+	// history still contains tool_use/tool_result blocks (e.g. Claude Code's
+	// Stop-hook follow-up), an Anthropic-compatible gateway that fronts Bedrock
+	// rejects it with TOOL_CONFIG_MISSING. Synthesize a minimal tools array from
+	// the history in that case so the request is accepted; this doesn't change
+	// behavior on a turn that isn't requesting a new tool call.
+	tools := uni.Tools
+	if len(strings.TrimSpace(string(tools))) == 0 {
+		if recon := ReconstructCanonicalToolsFromHistory(uni.Messages); recon != nil {
+			tools = recon
+		}
+	}
+
 	body := anthropicOutboundRequest{
 		Model:         uni.Model,
 		MaxTokens:     maxTokens,
@@ -176,7 +189,7 @@ func (a *AnthropicAdapter) BuildRequest(ctx context.Context, uni UnifiedRequest,
 		Temperature:   uni.Temperature,
 		TopP:          uni.TopP,
 		StopSequences: uni.StopSequences,
-		Tools:         uni.Tools,
+		Tools:         tools,
 		ToolChoice:    uni.ToolChoice,
 	}
 

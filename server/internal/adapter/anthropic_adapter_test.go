@@ -278,3 +278,67 @@ func TestAnthropicAdapter_ParseStreamChunk(t *testing.T) {
 		}
 	})
 }
+
+// TestAnthropicAdapter_BuildRequest_ReconstructsTools verifies that when a
+// request has NO tools but its history contains tool_use/tool_result blocks, the
+// outbound Anthropic body carries a synthesized tools array — preventing the
+// downstream (Bedrock-fronting) gateway's TOOL_CONFIG_MISSING 400.
+func TestAnthropicAdapter_BuildRequest_ReconstructsTools(t *testing.T) {
+	a := NewAnthropicAdapter(stubDecryptor{key: "k"})
+	ch := &model.Channel{Type: model.ChannelAnthropic, BaseURL: "https://gw.example/"}
+	uni := UnifiedRequest{
+		Model: "claude-sonnet-4-6",
+		// No Tools field.
+		Messages: []Message{
+			{Role: RoleUser, Content: []ContentBlock{TextBlock("weather?")}},
+			{Role: RoleAssistant, Content: []ContentBlock{
+				ToolUseBlockOf("t1", "get_weather", json.RawMessage(`{"city":"P"}`)),
+			}},
+			{Role: RoleUser, Content: []ContentBlock{
+				ToolResultBlockOf("t1", json.RawMessage(`[{"type":"text","text":"18C"}]`), false),
+			}},
+		},
+	}
+	req, err := a.BuildRequest(context.Background(), uni, ch)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	var body anthropicOutboundRequest
+	if err := json.Unmarshal(readBody(t, req), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Tools) == 0 {
+		t.Fatal("outbound body has no tools — would trigger TOOL_CONFIG_MISSING downstream")
+	}
+	var tools []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body.Tools, &tools); err != nil {
+		t.Fatalf("tools not valid json: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "get_weather" {
+		t.Fatalf("expected one reconstructed get_weather tool, got %s", body.Tools)
+	}
+}
+
+// TestAnthropicAdapter_BuildRequest_NoToolsWhenNoHistory ensures tool-free
+// requests stay tool-free (no spurious tools injected).
+func TestAnthropicAdapter_BuildRequest_NoToolsWhenNoHistory(t *testing.T) {
+	a := NewAnthropicAdapter(stubDecryptor{key: "k"})
+	ch := &model.Channel{Type: model.ChannelAnthropic, BaseURL: "https://gw.example/"}
+	uni := UnifiedRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}}},
+	}
+	req, err := a.BuildRequest(context.Background(), uni, ch)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	var body anthropicOutboundRequest
+	if err := json.Unmarshal(readBody(t, req), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Tools) != 0 {
+		t.Fatalf("no history tools → body.Tools should be empty, got %s", body.Tools)
+	}
+}

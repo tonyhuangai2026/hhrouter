@@ -579,3 +579,48 @@ func TestUnifiedToBedrock_NoToolConfigWhenNoToolBlocks(t *testing.T) {
 		t.Fatalf("no tool blocks → toolConfig should stay nil, got %+v", out.ToolConfig)
 	}
 }
+
+// TestReconstructCanonicalToolsFromHistory verifies an Anthropic-shaped tools
+// array is synthesized from history tool_use blocks (dedup by name), and nil is
+// returned when there are none.
+func TestReconstructCanonicalToolsFromHistory(t *testing.T) {
+	msgs := []Message{
+		{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}},
+		{Role: RoleAssistant, Content: []ContentBlock{
+			ToolUseBlockOf("t1", "get_weather", json.RawMessage(`{"city":"P"}`)),
+			ToolUseBlockOf("t2", "get_weather", json.RawMessage(`{"city":"L"}`)), // dup name
+		}},
+		{Role: RoleAssistant, Content: []ContentBlock{
+			ToolUseBlockOf("t3", "list_files", json.RawMessage(`{}`)),
+		}},
+	}
+	raw := ReconstructCanonicalToolsFromHistory(msgs)
+	if raw == nil {
+		t.Fatal("expected reconstructed tools, got nil")
+	}
+	var got []struct {
+		Name        string         `json:"name"`
+		InputSchema map[string]any `json:"input_schema"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 distinct tools, got %d: %s", len(got), raw)
+	}
+	names := map[string]bool{got[0].Name: true, got[1].Name: true}
+	if !names["get_weather"] || !names["list_files"] {
+		t.Fatalf("unexpected tool names: %s", raw)
+	}
+	if got[0].InputSchema["type"] != "object" {
+		t.Fatalf("expected object schema, got %v", got[0].InputSchema)
+	}
+}
+
+// TestReconstructCanonicalToolsFromHistory_None returns nil for tool-free convo.
+func TestReconstructCanonicalToolsFromHistory_None(t *testing.T) {
+	msgs := []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hello")}}}
+	if raw := ReconstructCanonicalToolsFromHistory(msgs); raw != nil {
+		t.Fatalf("expected nil, got %s", raw)
+	}
+}

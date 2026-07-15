@@ -942,6 +942,44 @@ func reconstructToolConfigFromHistory(messages []Message) *bedrockToolConfig {
 	return cfg
 }
 
+// ReconstructCanonicalToolsFromHistory builds a canonical (Anthropic-shaped)
+// tools array — [{"name":..,"description":..,"input_schema":{"type":"object"}}] —
+// from the distinct tool_use blocks in a conversation. It is the format-agnostic
+// analogue of reconstructToolConfigFromHistory: used when a request carries no
+// `tools` field but its history references tool calls, and the upstream (Bedrock,
+// or an Anthropic-compatible gateway fronting Bedrock) rejects such a request with
+// TOOL_CONFIG_MISSING. Returns nil (not an empty array) when there are no tool_use
+// blocks, so callers can leave `tools` absent for ordinary conversations.
+func ReconstructCanonicalToolsFromHistory(messages []Message) json.RawMessage {
+	type canonicalTool struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema map[string]any `json:"input_schema"`
+	}
+	seen := map[string]bool{}
+	var tools []canonicalTool
+	for _, m := range messages {
+		for _, c := range m.Content {
+			if !c.IsToolUse() || c.ToolUse.Name == "" || seen[c.ToolUse.Name] {
+				continue
+			}
+			seen[c.ToolUse.Name] = true
+			tools = append(tools, canonicalTool{
+				Name:        c.ToolUse.Name,
+				InputSchema: map[string]any{"type": "object"},
+			})
+		}
+	}
+	if len(tools) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(tools)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
 // bedrockToolResultContent renders a canonical tool_result content (raw JSON)
 // into Bedrock's toolResult.content list. Converse is strict about each sub-block:
 // a {json:…} sub-block's value MUST be a JSON OBJECT (not an array/string/number),
