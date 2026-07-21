@@ -9,35 +9,6 @@ import (
 	"github.com/agent-router/server/internal/model"
 )
 
-// TestChannelInfoMap verifies channelInfoMap returns the {channel_id,
-// channel_name, channel_type} shape with a RAW UTF-8 name, and returns nil for a
-// nil channel so callers can inject it unconditionally.
-func TestChannelInfoMap(t *testing.T) {
-	if got := channelInfoMap(nil); got != nil {
-		t.Fatalf("channelInfoMap(nil) = %#v, want nil", got)
-	}
-
-	ch := &model.Channel{ID: 42, Name: "上游渠道-A", Type: model.ChannelOpenAI}
-	m := channelInfoMap(ch)
-	if m == nil {
-		t.Fatal("channelInfoMap(ch) = nil, want map")
-	}
-	if m["channel_id"] != ch.ID {
-		t.Fatalf("channel_id = %#v, want %d", m["channel_id"], ch.ID)
-	}
-	// Name is the RAW UTF-8 value (JSON handles Unicode natively — no encoding).
-	if m["channel_name"] != "上游渠道-A" {
-		t.Fatalf("channel_name = %#v, want raw UTF-8 %q", m["channel_name"], "上游渠道-A")
-	}
-	if m["channel_type"] != string(model.ChannelOpenAI) {
-		t.Fatalf("channel_type = %#v, want %q", m["channel_type"], string(model.ChannelOpenAI))
-	}
-	// Exactly the three documented keys, nothing extra.
-	if len(m) != 3 {
-		t.Fatalf("channelInfoMap keys = %d (%v), want exactly 3", len(m), m)
-	}
-}
-
 // newTestContext returns a gin.Context backed by an httptest.ResponseRecorder so
 // header assertions can read what setChannelHeaders wrote.
 func newTestContext() (*gin.Context, *httptest.ResponseRecorder) {
@@ -111,48 +82,5 @@ func TestSetChannelHeaders_NonASCIINamePercentEncoded(t *testing.T) {
 	}
 	if rec.Header().Get(headerChannelType) != string(model.ChannelAnthropic) {
 		t.Fatalf("%s = %q, want %q", headerChannelType, rec.Header().Get(headerChannelType), string(model.ChannelAnthropic))
-	}
-}
-
-// TestNonStreamBodyInjection mirrors the serveNonStream success-path injection:
-// given a map[string]any response body and the serving channel, injecting
-// body["router"]=channelInfoMap(ch) must add a router object carrying the RAW
-// UTF-8 channel_name while leaving all pre-existing fields untouched.
-func TestNonStreamBodyInjection(t *testing.T) {
-	ch := &model.Channel{ID: 3, Name: "渠道-混合Mix", Type: model.ChannelOpenAI}
-
-	// A representative non-streaming OpenAI-shaped body.
-	body := map[string]any{
-		"id":     "chatcmpl-xyz",
-		"model":  "gpt-4o",
-		"object": "chat.completion",
-		"choices": []any{
-			map[string]any{"index": 0, "finish_reason": "stop"},
-		},
-	}
-
-	// This is exactly the injection performed in serveNonStream before c.JSON.
-	body["router"] = channelInfoMap(ch)
-
-	router, ok := body["router"].(map[string]any)
-	if !ok {
-		t.Fatalf("body[router] = %#v, want map[string]any", body["router"])
-	}
-	if router["channel_name"] != "渠道-混合Mix" {
-		t.Fatalf("router.channel_name = %#v, want raw UTF-8 %q", router["channel_name"], "渠道-混合Mix")
-	}
-	if router["channel_id"] != ch.ID {
-		t.Fatalf("router.channel_id = %#v, want %d", router["channel_id"], ch.ID)
-	}
-	if router["channel_type"] != string(model.ChannelOpenAI) {
-		t.Fatalf("router.channel_type = %#v, want %q", router["channel_type"], string(model.ChannelOpenAI))
-	}
-
-	// Pre-existing fields are unchanged.
-	if body["id"] != "chatcmpl-xyz" || body["model"] != "gpt-4o" || body["object"] != "chat.completion" {
-		t.Fatalf("existing scalar fields mutated: %#v", body)
-	}
-	if choices, ok := body["choices"].([]any); !ok || len(choices) != 1 {
-		t.Fatalf("choices field mutated: %#v", body["choices"])
 	}
 }

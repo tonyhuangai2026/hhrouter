@@ -10,15 +10,15 @@ import (
 
 // Channel-metadata exposure (Tech Design): once a relay request is served by a
 // concrete upstream channel, the response advertises WHICH channel actually
-// handled it. This is surfaced two ways, both derived from the SAME final
-// successful channel (lastAtt.channel):
-//   - three response headers X-Router-Channel-Id / X-Router-Channel-Name /
-//     X-Router-Channel-Type (available on both streaming and non-streaming
-//     responses), and
-//   - a top-level body["router"] object on non-streaming JSON responses.
+// handled it via three response headers derived from the final successful
+// channel (lastAtt.channel):
+//   - X-Router-Channel-Id / X-Router-Channel-Name / X-Router-Channel-Type
 //
-// Both helpers are pure and treat a nil channel as a no-op / nil result, so the
-// error paths (which have no successful channel) simply skip them.
+// Headers only — the channel is deliberately NOT injected into the response
+// body, so the body stays a faithful passthrough of the upstream response shape.
+// Available on both streaming and non-streaming responses. setChannelHeaders is
+// pure and treats a nil channel as a no-op, so the error paths (which have no
+// successful channel) simply skip it.
 
 const (
 	headerChannelID   = "X-Router-Channel-Id"
@@ -43,22 +43,6 @@ func setChannelHeaders(c *gin.Context, ch *model.Channel) {
 	h.Set(headerChannelID, strconv.FormatUint(uint64(ch.ID), 10))
 	h.Set(headerChannelName, percentEncodeHeaderValue(ch.Name))
 	h.Set(headerChannelType, string(ch.Type))
-}
-
-// channelInfoMap returns the {channel_id, channel_name, channel_type} object
-// injected under body["router"] on non-streaming responses. channel_name is the
-// RAW UTF-8 name (JSON handles Unicode natively — no percent-encoding here,
-// unlike the header). ch == nil returns nil so the caller can inject it
-// unconditionally.
-func channelInfoMap(ch *model.Channel) map[string]any {
-	if ch == nil {
-		return nil
-	}
-	return map[string]any{
-		"channel_id":   ch.ID,
-		"channel_name": ch.Name,
-		"channel_type": string(ch.Type),
-	}
 }
 
 // percentEncodeHeaderValue renders s as an ASCII-safe HTTP header value by

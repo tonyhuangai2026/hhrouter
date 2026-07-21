@@ -329,13 +329,11 @@ func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt i
 		// Success: adapt and write the response in the key's OUTPUT format, then account.
 		uniResp.Model = rc.uni.Model // echo the external model name to the client
 		body := buildResponse(rc.outFormat, uniResp)
-		// Advertise the channel that actually served the request: the X-Router-Channel-*
-		// headers (set before c.JSON commits them) and, for a map body (all three
-		// output formats currently return one), a top-level "router" object.
+		// Advertise the channel that actually served the request via the
+		// X-Router-Channel-* response headers (set before c.JSON commits them). The
+		// channel is NOT injected into the response body — headers only, so the body
+		// stays a byte-faithful passthrough of the upstream response shape.
 		setChannelHeaders(c, lastAtt.channel)
-		if m, ok := body.(map[string]any); ok {
-			m["router"] = channelInfoMap(lastAtt.channel)
-		}
 		c.JSON(http.StatusOK, body)
 
 		// Capture the verbatim response JSON for optional request-log I/O.

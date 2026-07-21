@@ -8,7 +8,7 @@
 // answers BOTH non-streaming (JSON) and streaming (SSE) requests. It asserts:
 //
 //	(non-stream) response header X-Router-Channel-Name == the mock channel name
-//	             AND top-level body router.channel_name == the mock channel name,
+//	             AND the response body carries NO top-level "router" key,
 //	(stream)     response header X-Router-Channel-Name == the mock channel name,
 //
 // over BOTH the OpenAI (/v1/chat/completions) and Anthropic (/v1/messages)
@@ -226,23 +226,9 @@ func (e *e2eEnv) doStreamHeaders(t *testing.T, path, body string) http.Header {
 	return resp.Header
 }
 
-// routerChannelName extracts body.router.channel_name from a decoded response.
-func routerChannelName(t *testing.T, body map[string]any) string {
-	t.Helper()
-	router, ok := body["router"].(map[string]any)
-	if !ok {
-		t.Fatalf("response body has no top-level router object: %#v", body)
-	}
-	name, ok := router["channel_name"].(string)
-	if !ok {
-		t.Fatalf("router.channel_name missing or not a string: %#v", router)
-	}
-	return name
-}
-
 // TestChannelInfoNonStreamOpenAI: a non-streaming OpenAI (/v1/chat/completions)
-// request advertises the serving channel in BOTH the X-Router-Channel-Name header
-// and the top-level body.router.channel_name.
+// request advertises the serving channel in the X-Router-Channel-Name header and
+// leaves the response body untouched (NO top-level "router" key).
 func TestChannelInfoNonStreamOpenAI(t *testing.T) {
 	env, cleanup := setupChannelInfoE2E(t)
 	defer cleanup()
@@ -253,8 +239,8 @@ func TestChannelInfoNonStreamOpenAI(t *testing.T) {
 	if got := hdr.Get("X-Router-Channel-Name"); got != channelInfoMockName {
 		t.Fatalf("X-Router-Channel-Name header = %q, want %q", got, channelInfoMockName)
 	}
-	if got := routerChannelName(t, body); got != channelInfoMockName {
-		t.Fatalf("body router.channel_name = %q, want %q", got, channelInfoMockName)
+	if _, present := body["router"]; present {
+		t.Fatalf("response body must NOT carry a top-level router key (headers only): %#v", body)
 	}
 }
 
@@ -270,8 +256,8 @@ func TestChannelInfoNonStreamAnthropic(t *testing.T) {
 	if got := hdr.Get("X-Router-Channel-Name"); got != channelInfoMockName {
 		t.Fatalf("X-Router-Channel-Name header = %q, want %q", got, channelInfoMockName)
 	}
-	if got := routerChannelName(t, body); got != channelInfoMockName {
-		t.Fatalf("body router.channel_name = %q, want %q", got, channelInfoMockName)
+	if _, present := body["router"]; present {
+		t.Fatalf("response body must NOT carry a top-level router key (headers only): %#v", body)
 	}
 }
 
