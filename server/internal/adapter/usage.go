@@ -102,6 +102,15 @@ func estimateUsageFromText(promptText, completionText string) Usage {
 	}
 }
 
+// EstimateSystemTokens is an exported helper for the relay's auto system-cache
+// decision (maybeInjectSystemCache): it estimates the token count of a system
+// prompt using the same ~4-chars-per-token heuristic as the rest of the
+// package, so the min-length threshold check stays consistent with the estimate
+// used for quota gating.
+func EstimateSystemTokens(s string) int {
+	return estimateTokens(s)
+}
+
 // EstimatePromptTokens is an exported helper for the relay's pre-flight quota
 // check (Tech Design §4/§6): it estimates input tokens from the unified request's
 // system prompt and message text before any upstream call.

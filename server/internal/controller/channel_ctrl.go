@@ -42,6 +42,9 @@ type channelRequest struct {
 	// UseInferenceProfile is a pointer to distinguish "unset" (create → DB
 	// default true) from an explicit false (update).
 	UseInferenceProfile *bool `json:"use_inference_profile"`
+	// AutoCacheSystem opts a bedrock/anthropic channel into auto-injecting a
+	// system prompt-cache breakpoint. Pointer so "unset" keeps the default.
+	AutoCacheSystem *bool `json:"auto_cache_system"`
 }
 
 // toInput converts the request into the service-layer input.
@@ -58,6 +61,7 @@ func (r *channelRequest) toInput() service.ChannelInput {
 		Weight:       r.Weight,
 
 		UseInferenceProfile: r.UseInferenceProfile,
+		AutoCacheSystem:     r.AutoCacheSystem,
 	}
 	if r.Type != nil {
 		t := model.ChannelType(*r.Type)

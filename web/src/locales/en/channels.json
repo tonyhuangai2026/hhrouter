@@ -60,6 +60,8 @@
     "modelMappingCopyHint": "Click a model name to copy it:",
     "useInferenceProfile": "Use inference profile",
     "useInferenceProfileHelp": "When on, bare Bedrock model IDs are auto-prefixed by the channel region (us./eu./apac.) to use a cross-region inference profile; already-prefixed or mapped IDs are left unchanged.",
+    "autoCacheSystem": "Auto-cache system prompt",
+    "autoCacheSystemHelp": "When on, a prompt-cache breakpoint is auto-injected at the end of the system prompt so even OpenAI-format requests (no cache_control) get Bedrock/Anthropic prompt caching. Only applied when the system prompt is long enough (≥1024 tokens, or ≥4096 for Haiku); a cache_control the client already sent is never overridden.",
     "suggestions": "Suggestions:",
     "group": "Group",
     "groupPlaceholder": "default",

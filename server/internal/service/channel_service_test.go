@@ -419,6 +419,114 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
+// ptrBool is a small helper for building *bool ChannelInput fields.
+func ptrBool(b bool) *bool { return &b }
+
+// reloadAutoCache re-reads the channel row and returns its persisted
+// AutoCacheSystem column (bypassing the masked view, straight from the DB).
+func reloadAutoCache(t *testing.T, gdb *gorm.DB, id uint) bool {
+	t.Helper()
+	var ch model.Channel
+	if err := gdb.First(&ch, id).Error; err != nil {
+		t.Fatalf("reload channel %d: %v", id, err)
+	}
+	return ch.AutoCacheSystem
+}
+
+// TestChannelService_Create_AutoCacheSystemTrue: Create with AutoCacheSystem=true
+// persists true.
+func TestChannelService_Create_AutoCacheSystemTrue(t *testing.T) {
+	gdb := newChannelTestDB(t)
+	svc := NewChannelService(gdb, nil, testSecret)
+
+	name := "ac-on"
+	typ := model.ChannelBedrock
+	region := "us-east-1"
+	v, err := svc.Create(ChannelInput{
+		Name:            &name,
+		Type:            &typ,
+		Region:          &region,
+		AutoCacheSystem: ptrBool(true),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !v.AutoCacheSystem {
+		t.Errorf("view AutoCacheSystem = false, want true")
+	}
+	if !reloadAutoCache(t, gdb, v.ID) {
+		t.Errorf("persisted AutoCacheSystem = false, want true")
+	}
+}
+
+// TestChannelService_Create_AutoCacheSystemOmitted: omitting AutoCacheSystem (nil
+// pointer) persists the default false.
+func TestChannelService_Create_AutoCacheSystemOmitted(t *testing.T) {
+	gdb := newChannelTestDB(t)
+	svc := NewChannelService(gdb, nil, testSecret)
+
+	name := "ac-default"
+	typ := model.ChannelBedrock
+	region := "us-east-1"
+	v, err := svc.Create(ChannelInput{
+		Name:   &name,
+		Type:   &typ,
+		Region: &region,
+		// AutoCacheSystem omitted -> nil -> default false.
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if v.AutoCacheSystem {
+		t.Errorf("view AutoCacheSystem = true, want false (default)")
+	}
+	if reloadAutoCache(t, gdb, v.ID) {
+		t.Errorf("persisted AutoCacheSystem = true, want false (default)")
+	}
+}
+
+// TestChannelService_Update_AutoCacheSystemToggle: Update true then false is
+// persisted correctly at each step.
+func TestChannelService_Update_AutoCacheSystemToggle(t *testing.T) {
+	gdb := newChannelTestDB(t)
+	svc := NewChannelService(gdb, nil, testSecret)
+
+	name := "ac-toggle"
+	typ := model.ChannelBedrock
+	region := "us-east-1"
+	v, err := svc.Create(ChannelInput{Name: &name, Type: &typ, Region: &region})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if reloadAutoCache(t, gdb, v.ID) {
+		t.Fatalf("precondition: fresh channel should have AutoCacheSystem=false")
+	}
+
+	// Update -> true.
+	uv, err := svc.Update(v.ID, ChannelInput{AutoCacheSystem: ptrBool(true)})
+	if err != nil {
+		t.Fatalf("Update true: %v", err)
+	}
+	if !uv.AutoCacheSystem {
+		t.Errorf("after Update(true): view AutoCacheSystem = false, want true")
+	}
+	if !reloadAutoCache(t, gdb, v.ID) {
+		t.Errorf("after Update(true): persisted = false, want true")
+	}
+
+	// Update -> false.
+	dv, err := svc.Update(v.ID, ChannelInput{AutoCacheSystem: ptrBool(false)})
+	if err != nil {
+		t.Fatalf("Update false: %v", err)
+	}
+	if dv.AutoCacheSystem {
+		t.Errorf("after Update(false): view AutoCacheSystem = true, want false")
+	}
+	if reloadAutoCache(t, gdb, v.ID) {
+		t.Errorf("after Update(false): persisted = true, want false")
+	}
+}
+
 // TestChannelService_DeleteCascadesPrices verifies that deleting a channel also
 // removes its model_prices rows in the same transaction (no orphan price rows),
 // and leaves another channel's prices intact.

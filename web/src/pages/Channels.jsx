@@ -153,6 +153,7 @@ export default function Channels() {
         key: '', // never prefilled — backend stores encrypted/masked
         models: editing.models || [],
         use_inference_profile: editing.use_inference_profile ?? true,
+        auto_cache_system: editing.auto_cache_system ?? false,
         group: editing.group || 'default',
         priority: editing.priority ?? 0,
         weight: editing.weight ?? 1,
@@ -167,6 +168,7 @@ export default function Channels() {
       key: '',
       models: [],
       use_inference_profile: true,
+      auto_cache_system: false,
       group: 'default',
       priority: 0,
       weight: 1,
@@ -592,6 +594,15 @@ export default function Channels() {
               label={t('form.useInferenceProfile')}
               extraText={t('form.useInferenceProfileHelp')}
               initValue={true}
+            />
+          ) : null}
+
+          {formType === 'bedrock' || formType === 'anthropic' ? (
+            <Form.Switch
+              field="auto_cache_system"
+              label={t('form.autoCacheSystem')}
+              extraText={t('form.autoCacheSystemHelp')}
+              initValue={false}
             />
           ) : null}
 

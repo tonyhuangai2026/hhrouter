@@ -2,9 +2,11 @@ package relay
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/agent-router/server/internal/adapter"
 	"github.com/agent-router/server/internal/model"
 )
 
@@ -80,4 +82,40 @@ func percentEncodeHeaderValue(s string) string {
 // encoding is unambiguously reversible.
 func isSafeHeaderByte(b byte) bool {
 	return b >= 0x20 && b < 0x7f && b != '%'
+}
+
+// maybeInjectSystemCache sets uni.SystemCacheControl to auto-cache the system
+// prompt when the chosen channel opted in (AutoCacheSystem) and the system is
+// long enough to be cacheable on the target model. It NEVER overrides a
+// breakpoint the client already set (uni.SystemCacheControl != nil), and only
+// applies to bedrock/anthropic channels (OpenAI upstream auto-caches, so its
+// channels are skipped). The min-length threshold is model-dependent: Haiku
+// requires 4096 tokens, other models 1024 (per the Tech Design); a system prompt
+// estimated below the threshold is left uncached because Bedrock silently skips
+// caching a too-short prefix, making an injected breakpoint pointless.
+//
+// uni is expected to be the per-attempt value copy (mutated via pointer) so the
+// injection does not leak into rc.uni or later failover candidates.
+func maybeInjectSystemCache(uni *adapter.UnifiedRequest, ch *model.Channel, upstreamModel string) {
+	if uni.SystemCacheControl != nil {
+		return // client intent wins — never override or stack breakpoints
+	}
+	if !ch.AutoCacheSystem {
+		return
+	}
+	if ch.Type != model.ChannelBedrock && ch.Type != model.ChannelAnthropic {
+		return
+	}
+	sys := strings.TrimSpace(uni.System)
+	if sys == "" {
+		return
+	}
+	threshold := 1024
+	if strings.Contains(strings.ToLower(upstreamModel), "haiku") {
+		threshold = 4096
+	}
+	if adapter.EstimateSystemTokens(sys) < threshold {
+		return
+	}
+	uni.SystemCacheControl = &adapter.CacheControl{Type: "ephemeral"}
 }

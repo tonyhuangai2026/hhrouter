@@ -60,6 +60,8 @@
     "modelMappingCopyHint": "点击模型名即可复制：",
     "useInferenceProfile": "使用跨区域推理配置",
     "useInferenceProfileHelp": "开启后，裸 Bedrock 模型 ID 会按渠道区域自动加前缀（us./eu./apac.）以走 inference profile；已带前缀或自定义映射的 ID 不变。",
+    "autoCacheSystem": "自动缓存 system 提示",
+    "autoCacheSystemHelp": "开启后，会在 system 提示末尾自动注入缓存断点，使即使 OpenAI 格式请求（无 cache_control）也能享受 Bedrock/Anthropic 提示缓存。仅当 system 足够长（≥1024 token，Haiku ≥4096）时注入；客户端已带的 cache_control 不会被覆盖。",
     "suggestions": "建议：",
     "group": "分组",
     "groupPlaceholder": "default",

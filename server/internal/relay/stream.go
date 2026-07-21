@@ -61,6 +61,10 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 		uni := rc.uni
 		uni.Model = upstreamModel
 		uni.Stream = true
+		// Auto-inject a system prompt-cache breakpoint when this channel opted in
+		// (AutoCacheSystem). uni is the per-attempt value copy, so mutating it here
+		// does not leak across failover candidates.
+		maybeInjectSystemCache(&uni, ch, upstreamModel)
 		lastAtt = attempt{channel: ch, upstream: upstreamModel}
 
 		// Price gate (USD billing) BEFORE the upstream connect: a missing price is

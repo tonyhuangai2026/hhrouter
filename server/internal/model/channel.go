@@ -64,6 +64,15 @@ type Channel struct {
 	// by the bedrock adapter; ignored for openai channels.
 	UseInferenceProfile bool `gorm:"not null;default:true" json:"use_inference_profile"`
 
+	// AutoCacheSystem, when true, makes the relay auto-inject a prompt-cache
+	// breakpoint at the end of the system prompt when routing to this channel
+	// (bedrock/anthropic only). This lets OpenAI-format inbound requests (which
+	// carry no cache_control) still benefit from Bedrock/Anthropic prompt
+	// caching. Defaults to false so existing channels are unaffected; a
+	// breakpoint the client already set is never overridden. Ignored for openai
+	// channels (which auto-cache upstream).
+	AutoCacheSystem bool `gorm:"not null;default:false" json:"auto_cache_system"`
+
 	// Group is the routing group tag used to group channels for key routing.
 	Group string `gorm:"type:varchar(64);not null;default:'default';index" json:"group"`
 

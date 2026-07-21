@@ -98,6 +98,9 @@ type ChannelInput struct {
 	// let GORM default:true apply) from an explicit false; update applies the
 	// explicit value (including false).
 	UseInferenceProfile *bool
+	// AutoCacheSystem is a pointer so nil means "leave unchanged" on update and
+	// "keep the default (false)" on create; a non-nil value sets it explicitly.
+	AutoCacheSystem *bool
 }
 
 // ChannelView is the outward representation of a channel: the same fields as the
@@ -270,6 +273,12 @@ func (s *ChannelService) applyInput(ch *model.Channel, in ChannelInput) {
 	// on update the explicit value (including false) takes effect.
 	if in.UseInferenceProfile != nil {
 		ch.UseInferenceProfile = *in.UseInferenceProfile
+	}
+	// AutoCacheSystem defaults to false (matching the Go zero value), so a nil
+	// pointer on create needs no post-insert fixup; only an explicit value is
+	// copied. On update the explicit value (including false) takes effect.
+	if in.AutoCacheSystem != nil {
+		ch.AutoCacheSystem = *in.AutoCacheSystem
 	}
 }
 
