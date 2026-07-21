@@ -297,6 +297,63 @@ func openAIToolChoiceToCanonical(raw json.RawMessage) json.RawMessage {
 	return nil
 }
 
+// addCacheUsageAnthropic renders the prompt-cache token counts into an Anthropic
+// usage map, matching the native Anthropic field names. Only non-zero counts are
+// added so a request without caching produces a byte-identical usage object.
+func addCacheUsageAnthropic(m map[string]any, u Usage) {
+	if m == nil {
+		return
+	}
+	if u.CacheReadTokens > 0 {
+		m["cache_read_input_tokens"] = u.CacheReadTokens
+	}
+	if u.CacheWriteTokens > 0 {
+		m["cache_creation_input_tokens"] = u.CacheWriteTokens
+	}
+}
+
+// addCacheUsageOpenAI renders the prompt-cache read count into an OpenAI usage map
+// under prompt_tokens_details.cached_tokens. OpenAI reports no separate cache-write
+// count, so only the read bucket is mapped, and only when non-zero (kept absent
+// otherwise for backward compatibility).
+func addCacheUsageOpenAI(m map[string]any, u Usage) {
+	if m == nil {
+		return
+	}
+	if u.CacheReadTokens > 0 {
+		m["prompt_tokens_details"] = map[string]any{"cached_tokens": u.CacheReadTokens}
+	}
+}
+
+// addCacheUsageBedrock renders the prompt-cache token counts into a Bedrock
+// Converse usage map, matching the native cacheReadInputTokens/cacheWriteInputTokens
+// field names. Only non-zero counts are added.
+func addCacheUsageBedrock(m map[string]any, u Usage) {
+	if m == nil {
+		return
+	}
+	if u.CacheReadTokens > 0 {
+		m["cacheReadInputTokens"] = u.CacheReadTokens
+	}
+	if u.CacheWriteTokens > 0 {
+		m["cacheWriteInputTokens"] = u.CacheWriteTokens
+	}
+}
+
+// AnthropicStreamDeltaUsage builds the usage object for the terminal Anthropic
+// streaming message_delta. output_tokens is always present; input_tokens and the
+// cache buckets are added only when non-zero, so a no-cache stream keeps the
+// existing {output_tokens} shape. Used by the relay's hand-built terminal
+// message_delta (the Anthropic streaming output path bypasses emitChunk).
+func AnthropicStreamDeltaUsage(u Usage) map[string]any {
+	m := map[string]any{"output_tokens": u.CompletionTokens}
+	if u.PromptTokens > 0 {
+		m["input_tokens"] = u.PromptTokens
+	}
+	addCacheUsageAnthropic(m, u)
+	return m
+}
+
 // BuildOpenAIResponse converts a UnifiedResponse into an inbound OpenAI Chat
 // Completions response body (id/created are filled by the relay).
 func BuildOpenAIResponse(r UnifiedResponse) map[string]any {
@@ -324,6 +381,12 @@ func BuildOpenAIResponse(r UnifiedResponse) map[string]any {
 			message["content"] = nil
 		}
 	}
+	usage := map[string]any{
+		"prompt_tokens":     r.Usage.PromptTokens,
+		"completion_tokens": r.Usage.CompletionTokens,
+		"total_tokens":      r.Usage.TotalTokens,
+	}
+	addCacheUsageOpenAI(usage, r.Usage)
 	return map[string]any{
 		"object": "chat.completion",
 		"model":  r.Model,
@@ -334,11 +397,7 @@ func BuildOpenAIResponse(r UnifiedResponse) map[string]any {
 				"finish_reason": stopToOpenAIFinish(r.StopReason),
 			},
 		},
-		"usage": map[string]any{
-			"prompt_tokens":     r.Usage.PromptTokens,
-			"completion_tokens": r.Usage.CompletionTokens,
-			"total_tokens":      r.Usage.TotalTokens,
-		},
+		"usage": usage,
 	}
 }
 
@@ -354,11 +413,13 @@ func BuildOpenAIStreamChunk(model string, c StreamChunk) map[string]any {
 		if c.Usage == nil {
 			return nil
 		}
-		return map[string]any{
+		m := map[string]any{
 			"prompt_tokens":     c.Usage.PromptTokens,
 			"completion_tokens": c.Usage.CompletionTokens,
 			"total_tokens":      c.Usage.TotalTokens,
 		}
+		addCacheUsageOpenAI(m, *c.Usage)
+		return m
 	}
 
 	// A chunk that carries ONLY usage (no content delta, no tool call, no stop
@@ -667,16 +728,18 @@ func BuildAnthropicResponse(r UnifiedResponse) map[string]any {
 	if len(content) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": ""})
 	}
+	usage := map[string]any{
+		"input_tokens":  r.Usage.PromptTokens,
+		"output_tokens": r.Usage.CompletionTokens,
+	}
+	addCacheUsageAnthropic(usage, r.Usage)
 	return map[string]any{
 		"type":        "message",
 		"role":        RoleAssistant,
 		"model":       r.Model,
 		"content":     content,
 		"stop_reason": stopToAnthropic(r.StopReason),
-		"usage": map[string]any{
-			"input_tokens":  r.Usage.PromptTokens,
-			"output_tokens": r.Usage.CompletionTokens,
-		},
+		"usage":       usage,
 	}
 }
 
@@ -743,6 +806,12 @@ func BuildBedrockResponse(r UnifiedResponse) map[string]any {
 	if len(content) == 0 {
 		content = append(content, map[string]any{"text": ""})
 	}
+	usage := map[string]any{
+		"inputTokens":  r.Usage.PromptTokens,
+		"outputTokens": r.Usage.CompletionTokens,
+		"totalTokens":  r.Usage.TotalTokens,
+	}
+	addCacheUsageBedrock(usage, r.Usage)
 	return map[string]any{
 		"output": map[string]any{
 			"message": map[string]any{
@@ -751,11 +820,7 @@ func BuildBedrockResponse(r UnifiedResponse) map[string]any {
 			},
 		},
 		"stopReason": stopToBedrock(r.StopReason),
-		"usage": map[string]any{
-			"inputTokens":  r.Usage.PromptTokens,
-			"outputTokens": r.Usage.CompletionTokens,
-			"totalTokens":  r.Usage.TotalTokens,
-		},
+		"usage":      usage,
 	}
 }
 
@@ -809,13 +874,13 @@ func BedrockMessageStopPayload(stop StopReason) map[string]any {
 
 // BedrockMetadataPayload is the UNWRAPPED metadata (terminal usage) body.
 func BedrockMetadataPayload(u Usage) map[string]any {
-	return map[string]any{
-		"usage": map[string]any{
-			"inputTokens":  u.PromptTokens,
-			"outputTokens": u.CompletionTokens,
-			"totalTokens":  u.TotalTokens,
-		},
+	usage := map[string]any{
+		"inputTokens":  u.PromptTokens,
+		"outputTokens": u.CompletionTokens,
+		"totalTokens":  u.TotalTokens,
 	}
+	addCacheUsageBedrock(usage, u)
+	return map[string]any{"usage": usage}
 }
 
 // ========================= Unified ⇄ Bedrock Converse =====================

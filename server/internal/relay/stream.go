@@ -580,7 +580,7 @@ func (r *Relayer) pumpStream(c *gin.Context, rc *requestContext, ad adapter.Adap
 			"delta": map[string]any{"stop_reason": adapter.StopToAnthropicWire(finalStop)},
 		}
 		if finalUsage != nil {
-			md["usage"] = map[string]any{"output_tokens": finalUsage.CompletionTokens}
+			md["usage"] = adapter.AnthropicStreamDeltaUsage(*finalUsage)
 		}
 		writeSSENamed(c, "message_delta", md)
 		writeSSENamed(c, "message_stop", map[string]any{"type": "message_stop"})
