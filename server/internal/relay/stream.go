@@ -117,7 +117,7 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 	// Stream phase: headers are now committed; proxy chunk-by-chunk. The content
 	// type depends on the OUTPUT format: SSE for openai/anthropic, the AWS
 	// event-stream binary framing for bedrock.
-	setStreamHeaders(c, rc.outFormat)
+	setStreamHeaders(c, rc.outFormat, lastAtt.channel)
 
 	// When the upstream speaks Anthropic AND the client wants Anthropic output, we
 	// forward the SSE events verbatim (pumpAnthropicPassthrough). This preserves
@@ -709,7 +709,7 @@ func setSSEHeaders(c *gin.Context) {
 // format: SSE (text/event-stream) for openai/anthropic, the AWS event-stream
 // binary framing (application/vnd.amazon.eventstream) for bedrock. The other
 // streaming headers (no-cache / keep-alive / no-buffering) apply to both.
-func setStreamHeaders(c *gin.Context, out OutputFormat) {
+func setStreamHeaders(c *gin.Context, out OutputFormat, ch *model.Channel) {
 	h := c.Writer.Header()
 	if out == OutBedrock {
 		h.Set("Content-Type", "application/vnd.amazon.eventstream")
@@ -719,6 +719,9 @@ func setStreamHeaders(c *gin.Context, out OutputFormat) {
 	h.Set("Cache-Control", "no-cache")
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
+	// Advertise the serving channel via X-Router-Channel-* headers BEFORE the
+	// stream headers are committed (WriteHeader below). ch == nil is a no-op.
+	setChannelHeaders(c, ch)
 	c.Writer.WriteHeader(http.StatusOK)
 	c.Writer.Flush()
 }
