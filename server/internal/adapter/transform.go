@@ -521,6 +521,12 @@ type anthropicInboundBlock struct {
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
 	IsError   bool            `json:"is_error"`
+	// cache_control marks a prompt-cache breakpoint after this block. Only the
+	// presence (and type) matters; kept as a minimal struct so it survives the
+	// string↔block-array decode without pulling in the whole shape.
+	CacheControl *struct {
+		Type string `json:"type"`
+	} `json:"cache_control,omitempty"`
 }
 
 // anthropicContentToBlocks flattens Anthropic content (string or block array)
@@ -541,6 +547,7 @@ func anthropicContentToBlocks(raw json.RawMessage) []ContentBlock {
 	}
 	out := make([]ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
+		before := len(out)
 		switch b.Type {
 		case "image":
 			if b.Source == nil {
@@ -571,6 +578,13 @@ func anthropicContentToBlocks(raw json.RawMessage) []ContentBlock {
 				out = append(out, TextBlock(b.Text))
 			}
 		}
+		// Carry a cache_control breakpoint onto the block we just emitted (a
+		// breakpoint applies AFTER its anchor block). If this inbound block produced
+		// no unified block (e.g. an empty/unusable block) there is no anchor to hang
+		// it on, so it is dropped.
+		if b.CacheControl != nil && len(out) > before {
+			out[len(out)-1].CacheControl = &CacheControl{Type: b.CacheControl.Type}
+		}
 	}
 	return out
 }
@@ -600,6 +614,34 @@ func anthropicSystemToText(raw json.RawMessage) string {
 	return ""
 }
 
+// anthropicSystemHasCacheControl reports whether an Anthropic system field, in its
+// block-array form, has any block carrying cache_control — the signal that the
+// whole system prompt should end with a cache breakpoint. A plain-string system
+// carries no cache_control (returns false), matching the Anthropic contract.
+func anthropicSystemHasCacheControl(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return false
+	}
+	var blocks []struct {
+		CacheControl *struct {
+			Type string `json:"type"`
+		} `json:"cache_control"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return false
+	}
+	for _, b := range blocks {
+		if b.CacheControl != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // ParseAnthropicRequest converts an inbound Anthropic Messages request into a
 // UnifiedRequest.
 func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
@@ -620,6 +662,7 @@ func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
 	// those out into System (mirroring the OpenAI inbound path) rather than
 	// forwarding them verbatim.
 	var systems []string
+	systemCached := anthropicSystemHasCacheControl(in.System)
 	if s := strings.TrimSpace(uni.System); s != "" {
 		systems = append(systems, s)
 	}
@@ -629,11 +672,19 @@ func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
 			if text := strings.TrimSpace(anthropicSystemToText(m.Content)); text != "" {
 				systems = append(systems, text)
 			}
+			// A role=system message in block-array form may also carry a cache
+			// breakpoint; fold it into the single system-level breakpoint.
+			if anthropicSystemHasCacheControl(m.Content) {
+				systemCached = true
+			}
 			continue
 		}
 		uni.Messages = append(uni.Messages, Message{Role: m.Role, Content: anthropicContentToBlocks(m.Content)})
 	}
 	uni.System = strings.Join(systems, "\n")
+	if systemCached {
+		uni.SystemCacheControl = &CacheControl{Type: "ephemeral"}
+	}
 	return uni
 }
 
@@ -646,6 +697,19 @@ func ParseAnthropicRequest(in AnthropicInbound) UnifiedRequest {
 // path when the upstream speaks Anthropic Messages). ok=false for an image block
 // with no usable source.
 func BuildAnthropicContentBlock(c ContentBlock) (block map[string]any, ok bool) {
+	b, ok := buildAnthropicContentBlock(c)
+	if ok && c.CacheControl != nil {
+		// A breakpoint on this block round-trips as cache_control:{type:"ephemeral"}
+		// so an Anthropic upstream re-establishes the same cache point.
+		b["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
+	return b, ok
+}
+
+// buildAnthropicContentBlock is the cache-control-agnostic core of
+// BuildAnthropicContentBlock (kept separate so cache_control is attached once,
+// after the block type has been resolved).
+func buildAnthropicContentBlock(c ContentBlock) (block map[string]any, ok bool) {
 	if c.IsToolUse() {
 		// Anthropic requires input to be a JSON object; default to {} when absent
 		// so the upstream does not reject a null/empty input.
@@ -909,19 +973,27 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 	out := bedrockConverseRequest{}
 	if strings.TrimSpace(uni.System) != "" {
 		out.System = []bedrockSystemBlock{{Text: uni.System}}
+		// A system-level cache breakpoint becomes a trailing {cachePoint} system
+		// block (Bedrock caches everything up to it). Only append when there is
+		// actual system text to anchor it — never produce an orphan cachePoint.
+		if uni.SystemCacheControl != nil {
+			out.System = append(out.System, bedrockSystemBlock{CachePoint: &bedrockCachePoint{Type: "default"}})
+		}
 	}
 	for _, m := range uni.Messages {
 		blocks := make([]bedrockContentBlock, 0, len(m.Content))
 		for _, c := range m.Content {
+			// Track whether this source block produced a real (non-cachePoint)
+			// content block, so a trailing cachePoint is only appended after a real
+			// anchor and the empty-message filter still counts real content.
+			before := len(blocks)
 			if c.IsImage() {
 				img, err := bedrockImageFromSource(ctx, c.Image)
 				if err != nil {
 					return bedrockConverseRequest{}, err
 				}
 				blocks = append(blocks, bedrockContentBlock{Image: img})
-				continue
-			}
-			if c.IsToolUse() {
+			} else if c.IsToolUse() {
 				input := json.RawMessage(c.ToolUse.Input)
 				if strings.TrimSpace(string(input)) == "" {
 					input = json.RawMessage(`{}`)
@@ -929,9 +1001,7 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 				blocks = append(blocks, bedrockContentBlock{ToolUse: &bedrockToolUseBlock{
 					ToolUseID: c.ToolUse.ID, Name: c.ToolUse.Name, Input: input,
 				}})
-				continue
-			}
-			if c.IsToolResult() {
+			} else if c.IsToolResult() {
 				trContent, err := bedrockToolResultContent(ctx, c.ToolResult.Content)
 				if err != nil {
 					return bedrockConverseRequest{}, err
@@ -940,17 +1010,23 @@ func unifiedToBedrock(ctx context.Context, uni UnifiedRequest) (bedrockConverseR
 					ToolUseID: c.ToolResult.ToolUseID,
 					Content:   trContent,
 				}})
-				continue
+			} else if c.Text != "" {
+				// Text block: skip empties. Bedrock rejects {text:""}, and an empty
+				// text block carries no information anyway.
+				blocks = append(blocks, bedrockContentBlock{Text: c.Text})
 			}
-			// Text block: skip empties. Bedrock rejects {text:""}, and an empty
-			// text block carries no information anyway.
-			if c.Text == "" {
-				continue
+			// A cache breakpoint on this source block becomes a {cachePoint} content
+			// block placed right AFTER its anchor — but only if the anchor actually
+			// rendered a real block (an empty text block produces no anchor, so its
+			// cachePoint would be orphaned and is dropped).
+			if c.CacheControl != nil && len(blocks) > before {
+				blocks = append(blocks, bedrockContentBlock{CachePoint: &bedrockCachePoint{Type: "default"}})
 			}
-			blocks = append(blocks, bedrockContentBlock{Text: c.Text})
 		}
 		// A message with no usable blocks (e.g. an empty assistant placeholder)
-		// must not be sent — Bedrock rejects an empty content array.
+		// must not be sent — Bedrock rejects an empty content array. A cachePoint is
+		// only ever appended after a real anchor block above, so blocks is never a
+		// lone cachePoint here.
 		if len(blocks) == 0 {
 			continue
 		}

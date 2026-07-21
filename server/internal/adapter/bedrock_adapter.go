@@ -57,6 +57,16 @@ type bedrockContentBlock struct {
 	Image      *bedrockImageBlock      `json:"image,omitempty"`
 	ToolUse    *bedrockToolUseBlock    `json:"toolUse,omitempty"`
 	ToolResult *bedrockToolResultBlock `json:"toolResult,omitempty"`
+	// CachePoint, when set, is a Converse cache breakpoint block placed after its
+	// anchor content block. Bedrock caches everything up to (and including) it.
+	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
+}
+
+// bedrockCachePoint is a Converse cachePoint block: {"cachePoint":{"type":"default"}}.
+// Bedrock does NOT cache automatically — an explicit cachePoint is required for a
+// prompt-cache read/write to occur. Type is always "default".
+type bedrockCachePoint struct {
+	Type string `json:"type"`
 }
 
 // bedrockToolUseBlock is a Converse toolUse content block: the model's request to
@@ -94,9 +104,14 @@ type bedrockMessage struct {
 	Content []bedrockContentBlock `json:"content"`
 }
 
-// bedrockSystemBlock is one Converse system content block (text only for MVP).
+// bedrockSystemBlock is one Converse system content block: either a text block
+// (Text set) or a cache breakpoint (CachePoint set). Text is omitempty so a
+// pure-cachePoint system block does NOT serialize {"text":"","cachePoint":...}
+// (which Bedrock rejects); a real text system block always has non-empty Text, so
+// omitempty does not change its serialization.
 type bedrockSystemBlock struct {
-	Text string `json:"text"`
+	Text       string             `json:"text,omitempty"`
+	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
 }
 
 // bedrockInferenceConfig maps the unified sampling/limit params.

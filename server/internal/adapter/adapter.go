@@ -104,6 +104,21 @@ type ContentBlock struct {
 	// text-flattening helpers and text-only upstream paths are unaffected.
 	ToolUse    *ToolUseBlock    `json:"tool_use,omitempty"`
 	ToolResult *ToolResultBlock `json:"tool_result,omitempty"`
+
+	// CacheControl, when non-nil, marks a prompt-cache breakpoint AFTER this block
+	// (Anthropic inbound cache_control:{type:"ephemeral"}). It is passed through to
+	// the upstream so caching actually happens: Bedrock gets a {cachePoint} block
+	// appended right after the anchor block, Anthropic gets cache_control back on the
+	// emitted block. Nil for every block that carried no cache_control, so a request
+	// without caching is byte-identical to before.
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
+}
+
+// CacheControl carries a prompt-cache breakpoint marker. Type mirrors the
+// Anthropic cache_control.type (always "ephemeral" inbound); it exists so the
+// unified layer can round-trip the presence of a breakpoint to the upstream.
+type CacheControl struct {
+	Type string `json:"type"`
 }
 
 // ToolUseBlock is a model's request to call a tool. ID is the provider-assigned
@@ -269,6 +284,13 @@ type UnifiedRequest struct {
 	System string `json:"system,omitempty"`
 	// Messages are the non-system conversational turns in order.
 	Messages []Message `json:"messages"`
+
+	// SystemCacheControl, when non-nil, marks a prompt-cache breakpoint at the END
+	// of the system prompt (set when any inbound system block carried cache_control).
+	// The upstream builders append a {cachePoint} (Bedrock) / cache_control block
+	// (Anthropic) after the system text. Nil for a plain-string system or no marker,
+	// so a request without caching is byte-identical to before.
+	SystemCacheControl *CacheControl `json:"system_cache_control,omitempty"`
 
 	// Stream requests a streaming response when true.
 	Stream bool `json:"stream,omitempty"`

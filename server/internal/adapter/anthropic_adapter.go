@@ -48,9 +48,13 @@ func (a *AnthropicAdapter) Name() string { return "anthropic" }
 
 // anthropicOutboundRequest is the request body sent to {base_url}/v1/messages.
 type anthropicOutboundRequest struct {
-	Model         string                 `json:"model"`
-	MaxTokens     int                    `json:"max_tokens"`
-	System        string                 `json:"system,omitempty"`
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
+	// System is a plain string (no cache breakpoint — byte-identical to the legacy
+	// string field) or, when the request carries a system-level cache breakpoint, a
+	// one-element block array [{type:text,text,cache_control:{type:ephemeral}}].
+	// Typed as any so both shapes serialize correctly; omitempty drops it when nil.
+	System        any                    `json:"system,omitempty"`
 	Messages      []anthropicOutboundMsg `json:"messages"`
 	Stream        bool                   `json:"stream,omitempty"`
 	Temperature   *float64               `json:"temperature,omitempty"`
@@ -182,10 +186,16 @@ func (a *AnthropicAdapter) BuildRequest(ctx context.Context, uni UnifiedRequest,
 		tools = ReconstructCanonicalToolsFromHistory(uni.Messages)
 	}
 
+	// System serialization: a plain trimmed string when there is no cache
+	// breakpoint (byte-identical to the legacy string field), or a one-element
+	// block array carrying cache_control when the request marked a system-level
+	// breakpoint so the Anthropic upstream re-establishes the same cache point.
+	system := buildAnthropicSystem(uni)
+
 	body := anthropicOutboundRequest{
 		Model:         uni.Model,
 		MaxTokens:     maxTokens,
-		System:        strings.TrimSpace(uni.System),
+		System:        system,
 		Messages:      msgs,
 		Stream:        uni.Stream,
 		Temperature:   uni.Temperature,
@@ -213,6 +223,24 @@ func (a *AnthropicAdapter) BuildRequest(ctx context.Context, uni UnifiedRequest,
 		req.Header.Set("Accept", "text/event-stream")
 	}
 	return req, nil
+}
+
+// buildAnthropicSystem renders the outbound `system` field. With no cache
+// breakpoint it returns the trimmed system STRING (serializes byte-identically to
+// the legacy string field, and to "" → omitted via omitempty when empty). With a
+// system-level breakpoint AND non-empty system text it returns a one-element block
+// array carrying cache_control:{type:"ephemeral"} so the Anthropic upstream caches
+// the system prompt. An empty system yields "" regardless (no orphan breakpoint).
+func buildAnthropicSystem(uni UnifiedRequest) any {
+	sys := strings.TrimSpace(uni.System)
+	if uni.SystemCacheControl == nil || sys == "" {
+		return sys
+	}
+	return []map[string]any{{
+		"type":          "text",
+		"text":          sys,
+		"cache_control": map[string]any{"type": "ephemeral"},
+	}}
 }
 
 // ---- ParseResponse -------------------------------------------------------
