@@ -142,6 +142,14 @@ func (s *ChannelService) Create(in ChannelInput) (*ChannelView, error) {
 		Priority: 0,
 		Weight:   1,
 		Status:   model.ChannelEnabled,
+		// NEW channels default AutoCacheSystem ON (auto-cache the system prompt on
+		// bedrock/anthropic). This is an APPLICATION-level default, not a DB column
+		// default: the column stays `default:false` so that when AutoMigrate adds
+		// the column to an EXISTING deployment, pre-existing channels keep it OFF
+		// (they opt in manually). applyInput overrides this only when the caller
+		// passed the flag explicitly (non-nil); an explicit false still persists
+		// because false == the column default (no GORM zero-value substitution).
+		AutoCacheSystem: true,
 	}
 
 	if in.Name == nil || strings.TrimSpace(*in.Name) == "" {

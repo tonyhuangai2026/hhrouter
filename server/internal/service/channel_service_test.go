@@ -460,7 +460,7 @@ func TestChannelService_Create_AutoCacheSystemTrue(t *testing.T) {
 }
 
 // TestChannelService_Create_AutoCacheSystemOmitted: omitting AutoCacheSystem (nil
-// pointer) persists the default false.
+// pointer) on Create persists the NEW-channel application default of true.
 func TestChannelService_Create_AutoCacheSystemOmitted(t *testing.T) {
 	gdb := newChannelTestDB(t)
 	svc := NewChannelService(gdb, nil, testSecret)
@@ -472,16 +472,44 @@ func TestChannelService_Create_AutoCacheSystemOmitted(t *testing.T) {
 		Name:   &name,
 		Type:   &typ,
 		Region: &region,
-		// AutoCacheSystem omitted -> nil -> default false.
+		// AutoCacheSystem omitted -> nil -> NEW channels default to true.
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !v.AutoCacheSystem {
+		t.Errorf("view AutoCacheSystem = false, want true (new-channel default)")
+	}
+	if !reloadAutoCache(t, gdb, v.ID) {
+		t.Errorf("persisted AutoCacheSystem = false, want true (new-channel default)")
+	}
+}
+
+// TestChannelService_Create_AutoCacheSystemExplicitFalse: an explicit false on
+// Create must persist as false even though new channels default to true — the
+// caller's intent wins, and false == the DB column default so no GORM zero-value
+// substitution turns it back into the app default.
+func TestChannelService_Create_AutoCacheSystemExplicitFalse(t *testing.T) {
+	gdb := newChannelTestDB(t)
+	svc := NewChannelService(gdb, nil, testSecret)
+
+	name := "ac-explicit-false"
+	typ := model.ChannelBedrock
+	region := "us-east-1"
+	v, err := svc.Create(ChannelInput{
+		Name:            &name,
+		Type:            &typ,
+		Region:          &region,
+		AutoCacheSystem: ptrBool(false),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if v.AutoCacheSystem {
-		t.Errorf("view AutoCacheSystem = true, want false (default)")
+		t.Errorf("view AutoCacheSystem = true, want false (explicit)")
 	}
 	if reloadAutoCache(t, gdb, v.ID) {
-		t.Errorf("persisted AutoCacheSystem = true, want false (default)")
+		t.Errorf("persisted AutoCacheSystem = true, want false (explicit)")
 	}
 }
 
@@ -494,12 +522,14 @@ func TestChannelService_Update_AutoCacheSystemToggle(t *testing.T) {
 	name := "ac-toggle"
 	typ := model.ChannelBedrock
 	region := "us-east-1"
-	v, err := svc.Create(ChannelInput{Name: &name, Type: &typ, Region: &region})
+	// Seed with an explicit false so the toggle starts from a known OFF state
+	// (new channels now default ON, so we must set it explicitly here).
+	v, err := svc.Create(ChannelInput{Name: &name, Type: &typ, Region: &region, AutoCacheSystem: ptrBool(false)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if reloadAutoCache(t, gdb, v.ID) {
-		t.Fatalf("precondition: fresh channel should have AutoCacheSystem=false")
+		t.Fatalf("precondition: channel seeded with explicit false should have AutoCacheSystem=false")
 	}
 
 	// Update -> true.
