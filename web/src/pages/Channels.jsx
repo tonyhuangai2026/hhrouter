@@ -168,7 +168,9 @@ export default function Channels() {
       key: '',
       models: [],
       use_inference_profile: true,
-      auto_cache_system: false,
+      // New channels default auto-cache ON (matches the backend Create default);
+      // only bedrock/anthropic actually use it (the switch is hidden for openai).
+      auto_cache_system: true,
       group: 'default',
       priority: 0,
       weight: 1,
@@ -593,7 +595,6 @@ export default function Channels() {
               field="use_inference_profile"
               label={t('form.useInferenceProfile')}
               extraText={t('form.useInferenceProfileHelp')}
-              initValue={true}
             />
           ) : null}
 
@@ -602,7 +603,6 @@ export default function Channels() {
               field="auto_cache_system"
               label={t('form.autoCacheSystem')}
               extraText={t('form.autoCacheSystemHelp')}
-              initValue={false}
             />
           ) : null}
 
