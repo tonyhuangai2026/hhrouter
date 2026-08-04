@@ -2,11 +2,15 @@
 # Serves the built SPA from /usr/share/nginx/html and reverse-proxies the
 # management API (/api) and relay gateway (/v1) to the backend service.
 #
-# BACKEND_HOST defaults to the docker-compose service name "backend" on port 3000.
-# Override by editing the upstream below if your backend runs elsewhere.
+# The backend address is templated so one image works in both topologies:
+#   - docker-compose: separate containers on a user network -> host "backend"
+#   - ECS Fargate:    both containers share the task network namespace, so the
+#                     backend is reachable only as 127.0.0.1 (no "backend" DNS)
+# nginx's official entrypoint runs envsubst over /etc/nginx/templates/*.template,
+# so BACKEND_ORIGIN is substituted at container start.
 
 upstream backend_upstream {
-    server backend:3000;
+    server ${BACKEND_ORIGIN};
 }
 
 server {

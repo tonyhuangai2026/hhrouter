@@ -84,6 +84,11 @@ services:
       context: ./web
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      # Separate containers on the compose network: reach the backend by service
+      # name. (Under ECS Fargate both containers share one network namespace, so
+      # there this is 127.0.0.1:3000 — see deploy/cloudformation-ecs.yml.)
+      BACKEND_ORIGIN: backend:3000
     depends_on:
       backend:
         condition: service_healthy

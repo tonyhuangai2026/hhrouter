@@ -1,0 +1,683 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Agent Router Platform - ECS Fargate deployment (highly available application tier).
+  Attaches to an EXISTING VPC (pass VpcId + two public subnets), adds private
+  subnets across two AZs, an internet-facing
+  ALB, an ECS Fargate service running the backend and frontend containers (2
+  tasks by default, spread across AZs), RDS PostgreSQL and ElastiCache Redis.
+  Unlike the single-EC2 template, losing one AZ or one task does not take the
+  platform down: ECS reschedules automatically and the ALB stops routing to
+  unhealthy targets.
+
+  The application itself is stateless — it writes nothing to local disk — so the
+  only state that had to move off the box is PostgreSQL (authoritative) and Redis
+  (a rebuildable real-time quota counter / model-list cache).
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  # ---- Existing network to attach to ----
+  # The template deliberately does NOT create a VPC: accounts commonly sit at the
+  # 5-VPC default limit, and a router that has to wait on a quota increase to
+  # deploy is a bad tradeoff. Reusing a VPC also keeps this stack in the same
+  # network as anything it must reach privately.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC to deploy into.
+
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >
+      Exactly two EXISTING public subnets in different AZs (they host the ALB and
+      the NAT gateway). They must have a default route to an internet gateway.
+
+  PrivateSubnetACidr:
+    Type: String
+    Default: 10.20.32.0/20
+    Description: CIDR for the new private subnet in AZ #1. Must be free inside the VPC's range.
+
+  PrivateSubnetBCidr:
+    Type: String
+    Default: 10.20.48.0/20
+    Description: CIDR for the new private subnet in AZ #2. Must be free inside the VPC's range.
+
+  BackendImage:
+    Type: String
+    Description: >
+      Full ECR image URI for the backend, e.g.
+      <acct>.dkr.ecr.us-east-1.amazonaws.com/agent-router-platform-backend:<tag>.
+      Use an immutable tag (not :latest) so a service update is reproducible.
+
+  FrontendImage:
+    Type: String
+    Description: Full ECR image URI for the frontend nginx image.
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+    Description: >
+      Number of Fargate tasks. Keep >= 2 for availability: with 1 task there is
+      nothing to fail over to, which defeats the purpose of this template.
+
+  TaskCpu:
+    Type: String
+    Default: "1024"
+    AllowedValues: ["512", "1024", "2048", "4096"]
+    Description: Fargate task CPU units (1024 = 1 vCPU) shared by both containers.
+
+  TaskMemory:
+    Type: String
+    Default: "2048"
+    AllowedValues: ["1024", "2048", "3072", "4096", "8192"]
+    Description: Fargate task memory (MiB). Must be a valid pairing with TaskCpu.
+
+  # ---- Data tier ----
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    Description: RDS instance class. db.t4g.micro is enough for this workload's config/log traffic.
+
+  DbMultiAZ:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      RDS Multi-AZ. "false" (default) keeps cost down and still has automated
+      backups with minute-scale recovery; set "true" for automatic failover.
+
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    Description: RDS storage (GiB). gp3, autoscaling up to 5x via MaxAllocatedStorage.
+
+  CacheNodeType:
+    Type: String
+    Default: cache.t4g.micro
+    Description: ElastiCache node type for Redis.
+
+  # ---- Application secrets (REQUIRED) ----
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: Secret that signs admin JWTs (HS256). Long random string.
+
+  SecretKey:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: >
+      AES-GCM key that encrypts upstream channel credentials at rest. CRITICAL:
+      if you are migrating an existing database, this MUST be the same value the
+      old deployment used, or every stored channel key becomes undecryptable.
+
+  PostgresPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    AllowedPattern: '[a-zA-Z0-9!#$%&()*+,\-.:;<=>?\[\]^_{|}~]*'
+    Description: RDS master password (RDS forbids '/', '@', '"' and spaces).
+
+  AdminUsername:
+    Type: String
+    Default: ""
+    Description: Optional bootstrap admin username (seeded on first start if both admin params are set).
+
+  AdminPassword:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Optional bootstrap admin password.
+
+  # ---- Networking / TLS ----
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: >
+      Optional ACM certificate ARN. When set, the ALB listens on HTTPS :443 and
+      redirects :80 to it. When blank, only plain HTTP :80 is served (fine for a
+      *.elb.amazonaws.com smoke test, not for production traffic).
+
+  AlbIdleTimeout:
+    Type: Number
+    Default: 300
+    MinValue: 60
+    MaxValue: 4000
+    Description: >
+      ALB idle timeout in seconds. MUST comfortably exceed the longest streaming
+      response: /v1/* replies are SSE and a slow model can think for minutes.
+      The 60s default would cut long answers off mid-stream.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: CloudWatch Logs retention for container logs.
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+  NoCertificate: !Equals [!Ref CertificateArn, ""]
+  IsDbMultiAZ: !Equals [!Ref DbMultiAZ, "true"]
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ======================= Networking =======================
+  # VPC, internet gateway and public subnets are pre-existing (passed in as
+  # parameters). Only the private tier is created here.
+
+  # ---- Private subnets (Fargate tasks, RDS, Redis) ----
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnetACidr
+      # Pin each private subnet to the same AZ as the public subnet it shares an
+      # index with, so the NAT gateway (public A) and the tasks that route
+      # through it stay in one AZ, and RDS/Redis land in the same two AZs as the
+      # tasks that talk to them.
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-a"
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-b"
+
+  # ---- NAT: private tasks need outbound access to Bedrock / upstream gateways
+  # and to the SageMaker probe endpoint. One NAT gateway (in AZ a) is a cost/HA
+  # tradeoff: if AZ a dies, tasks in AZ b lose egress. Add a second NAT per AZ if
+  # that matters more than ~$32/month.
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Select [0, !Ref PublicSubnetIds]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat"
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-rt"
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ======================= Security groups =======================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - public HTTP/HTTPS ingress
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (redirected to HTTPS when a certificate is set)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-alb-sg"
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate tasks - only the ALB may reach the frontend port
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-task-sg"
+
+  TaskIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: frontend nginx, ALB only
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS PostgreSQL - reachable only from the Fargate tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+          Description: postgres from tasks
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-db-sg"
+
+  CacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ElastiCache Redis - reachable only from the Fargate tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+          Description: redis from tasks
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-cache-sg"
+
+  # ======================= Data tier =======================
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "${AWS::StackName} private subnets"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    # Keep the data if the stack is deleted — the whole point of moving Postgres
+    # off the instance was that the data outlives the compute.
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${AWS::StackName}-db"
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      MaxAllocatedStorage: !Ref DbAllocatedStorage  # set higher to allow storage autoscaling
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: postgres
+      MasterUserPassword: !Ref PostgresPassword
+      DBName: agent_router
+      MultiAZ: !If [IsDbMultiAZ, true, false]
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      AutoMinorVersionUpgrade: true
+      EnablePerformanceInsights: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-db"
+
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub "${AWS::StackName} private subnets"
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  # Single-node Redis. Redis holds only rebuildable state: the real-time quota
+  # counters lazily reseed from the authoritative PostgreSQL used_quota columns,
+  # and the channel model-list cache has a 10-minute TTL. Losing this node costs
+  # accuracy for seconds, not data.
+  Cache:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-redis"
+      Engine: redis
+      CacheNodeType: !Ref CacheNodeType
+      NumCacheNodes: 1
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref CacheSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-redis"
+
+  # ======================= Load balancer =======================
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets: !Ref PublicSubnetIds
+      LoadBalancerAttributes:
+        # Long idle timeout for SSE: /v1/* streams tokens for as long as the
+        # model takes, and the ALB must not sever an idle-looking connection.
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref AlbIdleTimeout
+        - Key: routing.http2.enabled
+          Value: "true"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-tg"
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip           # required for Fargate awsvpc networking
+      HealthCheckPath: /api/ping
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+        # Streaming responses are long-lived; give in-flight SSE connections room
+        # to finish on deploy rather than being cut at the 300s default.
+        - Key: load_balancing.algorithm.type
+          Value: least_outstanding_requests
+
+  # When a certificate is supplied, :80 only redirects to :443.
+  HttpRedirectListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # No certificate: serve plain HTTP so the *.elb.amazonaws.com URL works.
+  HttpForwardListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: NoCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ======================= ECS =======================
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${AWS::StackName}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # Pulls images and writes logs.
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # The application's own identity. Deliberately EMPTY of AWS permissions: the
+  # relay authenticates to Bedrock with per-channel bearer keys stored (encrypted)
+  # in the database, so it needs no SigV4 and no IAM access. Keeping this role
+  # bare means a compromised container cannot reach the AWS control plane.
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        # ---- backend ----
+        # Both containers share the task's network namespace, so the frontend
+        # reaches the backend on 127.0.0.1:3000 exactly as it did over the
+        # compose network alias.
+        - Name: backend
+          Image: !Ref BackendImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: PORT
+              Value: "3000"
+            - Name: GIN_MODE
+              Value: release
+            - Name: POSTGRES_HOST
+              Value: !GetAtt Database.Endpoint.Address
+            - Name: POSTGRES_PORT
+              Value: !GetAtt Database.Endpoint.Port
+            - Name: POSTGRES_USER
+              Value: postgres
+            - Name: POSTGRES_PASSWORD
+              Value: !Ref PostgresPassword
+            - Name: POSTGRES_DB
+              Value: agent_router
+            # RDS terminates TLS; require it rather than sending credentials in clear.
+            - Name: POSTGRES_SSLMODE
+              Value: require
+            - Name: REDIS_ADDR
+              Value: !Sub "${Cache.RedisEndpoint.Address}:${Cache.RedisEndpoint.Port}"
+            - Name: REDIS_PASSWORD
+              Value: ""
+            - Name: REDIS_DB
+              Value: "0"
+            - Name: JWT_SECRET
+              Value: !Ref JwtSecret
+            - Name: SECRET_KEY
+              Value: !Ref SecretKey
+            - Name: ADMIN_USERNAME
+              Value: !Ref AdminUsername
+            - Name: ADMIN_PASSWORD
+              Value: !Ref AdminPassword
+          HealthCheck:
+            Command: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/ping || exit 1"]
+            Interval: 15
+            Timeout: 5
+            Retries: 5
+            StartPeriod: 60
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+
+        # ---- frontend ----
+        - Name: frontend
+          Image: !Ref FrontendImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          Environment:
+            # awsvpc mode gives the task ONE network namespace, so there is no
+            # "backend" service DNS the way docker-compose provided — the sibling
+            # container is only reachable over loopback.
+            - Name: BACKEND_ORIGIN
+              Value: 127.0.0.1:3000
+          DependsOn:
+            - ContainerName: backend
+              Condition: HEALTHY
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  # ECS refuses to attach a service to a target group that no listener references
+  # yet, so the service must wait for whichever listener the certificate choice
+  # created. DependsOn cannot name a conditional resource (it is not "unresolved"
+  # in the other branch — it simply does not exist), so the wait is expressed as a
+  # value dependency instead: this parameter reads an attribute of the listener
+  # that does exist, which is enough for CloudFormation to order them.
+  ListenerReadyBarrier:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AWS::StackName}/listener-ready"
+      Type: String
+      Value: !If
+        - HasCertificate
+        - !Ref HttpsListener
+        - !Ref HttpForwardListener
+      Description: "Internal ordering barrier: ensures a listener exists before the ECS service attaches."
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: ListenerReadyBarrier
+    Properties:
+      ServiceName: !Sub "${AWS::StackName}-svc"
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      # Spread across AZs so one AZ failure cannot take every task.
+      PlacementStrategies: []
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100   # never drop below full capacity during deploys
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true             # a bad image rolls itself back
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED   # tasks are private; egress via NAT
+          Subnets:
+            - !Ref PrivateSubnetA
+            - !Ref PrivateSubnetB
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  Url:
+    Description: Public URL of the platform.
+    Value: !If
+      - HasCertificate
+      - !Sub "https://${LoadBalancer.DNSName}"
+      - !Sub "http://${LoadBalancer.DNSName}"
+
+  AlbDnsName:
+    Description: Raw ALB DNS name (point your CNAME/ALIAS here).
+    Value: !GetAtt LoadBalancer.DNSName
+
+  AlbHostedZoneId:
+    Description: ALB canonical hosted zone id (for a Route53 ALIAS record).
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+
+  DbEndpoint:
+    Description: RDS endpoint (private; reachable only from the tasks' security group).
+    Value: !GetAtt Database.Endpoint.Address
+
+  RedisEndpoint:
+    Description: ElastiCache Redis endpoint (private).
+    Value: !GetAtt Cache.RedisEndpoint.Address
+
+  ClusterName:
+    Value: !Ref Cluster
+
+  ServiceName:
+    Value: !GetAtt Service.Name
+
+  LogGroupName:
+    Description: CloudWatch log group holding backend/frontend container logs.
+    Value: !Ref LogGroup
