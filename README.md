@@ -10,7 +10,8 @@ request logging with an analytics dashboard.
 - **Frontend** — React + Vite + Semi Design (`/web`)
   - 界面语言：中/英，自动检测可手动切换 / UI language: Chinese & English, auto-detected and switchable
 - **Data** — PostgreSQL 16 (durable) + Redis 7 (quota counters, model cache)
-- **Deploy** — `docker compose up -d` (four services, one command)
+- **Deploy** — `docker compose up -d` for local/PoC, or **ECS Fargate + RDS + ElastiCache**
+  for a highly available deployment (see [Deployment options](#deployment-options))
 
 ---
 
@@ -92,6 +93,38 @@ docker compose down -v         # also delete pgdata + redisdata (full reset)
 
 > **Ports:** the UI/API are published on `HTTP_PORT` (default `8080`). The backend,
 > postgres, and redis are internal to the compose network and not published on the host.
+
+---
+
+## Deployment options
+
+Local `docker compose` is the fastest way to try the platform, but it puts the app and its
+data on one machine — lose it and you lose both. Two CloudFormation templates under
+[`/deploy`](deploy/README.md) cover the two postures:
+
+| | `docker compose` / `cloudformation.yml` | `cloudformation-ecs.yml` |
+|---|---|---|
+| **Topology** | one box: app + postgres + redis | ECS Fargate, 2 tasks across 2 AZs, ALB in front |
+| **Data** | on the box's disk | **RDS PostgreSQL** + **ElastiCache Redis** |
+| **A node dies** | outage until it is rebuilt; disk data is lost with the instance | no outage — ECS reschedules, ALB stops routing to the unhealthy task |
+| **Cost (rough)** | ~$16/mo | ~$70/mo (Fargate + NAT + RDS + Redis + ALB) |
+| **Good for** | PoC, demo, local dev | anything carrying real traffic |
+
+The application is **stateless** — it writes nothing to local disk, holds no in-process
+cache, and signs JWTs with HS256 instead of keeping server-side sessions — so scaling out
+needs no code change and no session affinity. The only state that must live outside a
+container is PostgreSQL. Redis is not authoritative either: quota counters reseed
+themselves from the database's `used_quota` columns and the channel model list is a
+10-minute cache, so losing Redis costs seconds of accuracy rather than data.
+
+Two things worth knowing before running behind a load balancer:
+
+- **Raise the idle timeout.** `/v1/*` responses are SSE, and a model that is still
+  thinking looks like an idle connection. The ECS template defaults to 300s; the AWS
+  default of 60s truncates long answers mid-stream.
+- **The ECS template takes an existing `VpcId`.** Bring your own VPC (fresh or existing) —
+  [deploy/README.md](deploy/README.md) lists exactly what it must provide and includes a
+  script that creates a conforming one.
 
 ---
 
@@ -178,6 +211,55 @@ curl -s http://localhost:8080/api/rules \
         "target_group":"default"
       }'
 ```
+
+#### Model-tier routing (`target_model`)
+
+A rule can also declare **which upstream model serves the request**, not just which
+channel. That is what lets one channel carry several quality tiers — expensive model for
+hard turns, cheap model for simple ones — instead of needing one channel per model.
+
+Rules are evaluated by ascending `priority` and the first match wins, so order them
+strictest-first:
+
+```bash
+# hard turns (write/tool-call AND long output) → the expensive model
+curl -s http://localhost:8080/api/rules -X POST \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"hard-tier","enabled":true,"priority":0,
+       "match":{"groups":["default"]},
+       "expr":"w == 1 && t > 500",
+       "target_channel_ids":[1],
+       "target_model":"anthropic.claude-opus-4-8"}'
+
+# everything else → the cheap model (no expr = always matches, so keep it last)
+curl -s http://localhost:8080/api/rules -X POST \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"easy-tier","enabled":true,"priority":9,
+       "match":{"groups":["default"]},
+       "target_channel_ids":[1],
+       "target_model":"anthropic.claude-haiku-4-5-20251001-v1:0"}'
+```
+
+How it behaves:
+
+- **Leave `target_model` empty** and the behaviour is exactly as before — the client's
+  requested model is used.
+- When set, it replaces the requested model for **both** upstream resolution *and*
+  candidate-channel filtering. The filtering half is the useful one: the channel no longer
+  has to declare whatever model name the client happens to send, so N models stop
+  requiring N channels.
+- The channel's `model_mapping` still applies **on top** of it — the rule says *which
+  model*, the channel says *what that model is called here* (e.g. the same Opus is
+  `claude-opus-4-8` on a gateway and `anthropic.claude-opus-4-8` on Bedrock).
+- Billing, the prompt-cache threshold and `request_logs.upstream_model` all follow the
+  override, so cost is charged against the model that actually ran.
+- If nothing can serve the `target_model`, the request **fails** naming the rule and the
+  model — it does *not* silently fall through to a cheaper tier, which would defeat the
+  point of quality tiering. Configure a price for every (channel, target_model) pair.
+
+`w` and `t` come from the optional routing probe (see the probe settings page); rules that
+never reference them never invoke it. To tier on prompt size alone with no probe, use
+`match.min_tokens` / `max_tokens` or an `expr` over `tokens` instead.
 
 ### 6. Generate an API key
 
@@ -277,6 +359,7 @@ All variables are documented in [`.env.example`](./.env.example). Key ones:
 | `SECRET_KEY`                      | **yes**  | —              | Encrypts stored channel keys (AES-256-GCM)         |
 | `GIN_MODE`                        | no       | `release`      | `release` / `debug` / `test`                       |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | no     | empty          | If both set, seed an admin on first start          |
+| `BACKEND_ORIGIN`                  | no       | `backend:3000` | *frontend container only, set per-topology rather than via `.env`* — where nginx proxies `/api` and `/v1`. `docker-compose.yml` pins it to `backend:3000`; the ECS template sets `127.0.0.1:3000`, since Fargate gives both containers one network namespace and no service DNS. |
 
 > `SECRET_KEY` may be any length: the server derives a 32-byte AES-256 key from it with
 > SHA-256. Use a long random value in production. Changing it later makes previously
@@ -339,8 +422,13 @@ with `npm run build` (outputs `web/dist`, which the nginx container serves in pr
   config/          env parsing (PORT, POSTGRES_*/DB_DSN, REDIS_ADDR, JWT_SECRET, SECRET_KEY)
   internal/        model, db, middleware, service, router engine, adapters, relay, controllers
 /web               React + Vite + Semi Design SPA (Dockerfile = build → nginx)
-  nginx.conf       serves dist + reverse-proxies /api and /v1 to backend:3000
+  nginx.conf.template  serves dist + reverse-proxies /api and /v1 to $BACKEND_ORIGIN
+                       (backend:3000 under compose, 127.0.0.1:3000 under ECS Fargate,
+                        where both containers share one network namespace)
 docker-compose.yml four services: postgres / redis / backend / frontend
+/deploy            CloudFormation: cloudformation.yml (single EC2) and
+                   cloudformation-ecs.yml (ECS Fargate + RDS + ElastiCache); see
+                   deploy/README.md
 .env.example       all configuration variables with defaults
 ```
 
