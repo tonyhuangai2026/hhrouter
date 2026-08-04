@@ -38,6 +38,16 @@ type RoutingRule struct {
 	// enabled rule's expression references w or t, the engine invokes the routing
 	// probe once per request to obtain them. Validated (compiled) on save.
 	Expr string `gorm:"type:text" json:"expr,omitempty"`
+
+	// TargetModel optionally overrides which upstream model serves a matched
+	// request. Empty (default) = use the client's requested model, i.e. exactly the
+	// legacy behaviour. When set, it replaces the requested model BOTH for candidate
+	// channel filtering and for upstream model resolution, so one channel can serve
+	// several difficulty tiers (e.g. opus for `w == 1 && t > 500`, haiku otherwise)
+	// without duplicating the channel per model. This is an EXTERNAL model name: the
+	// channel's model_mapping still applies on top of it, so the same rule can serve
+	// channels that spell the same model differently upstream.
+	TargetModel string `gorm:"type:varchar(128)" json:"target_model,omitempty"`
 }
 
 // MatchSpec is the decoded shape of RoutingRule.Match.

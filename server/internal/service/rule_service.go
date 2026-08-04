@@ -42,6 +42,9 @@ type RuleInput struct {
 	TargetChannelIDs *[]uint
 	TargetGroup      *string
 	Expr             *string
+	// TargetModel is a pointer so nil means "leave unchanged" on update and
+	// "no override" on create, matching the ChannelInput.AutoCacheSystem style.
+	TargetModel *string
 }
 
 // Create validates and persists a new routing rule.
@@ -141,6 +144,15 @@ func (s *RuleService) applyInput(rule *model.RoutingRule, in RuleInput) error {
 			return fmt.Errorf("%w: expr: %v", ErrInvalidRule, err)
 		}
 		rule.Expr = e
+	}
+	if in.TargetModel != nil {
+		// Trim so a whitespace-only value lands as the empty string ("no
+		// override") rather than an invisible-but-non-empty model name. No
+		// "some channel must serve this model" check on purpose: that would
+		// force channels to be configured before rules and would let an
+		// auto_disabled channel block rule saves. Runtime ErrNoCandidate is the
+		// safety net; the rule editor shows a soft warning.
+		rule.TargetModel = strings.TrimSpace(*in.TargetModel)
 	}
 	return nil
 }

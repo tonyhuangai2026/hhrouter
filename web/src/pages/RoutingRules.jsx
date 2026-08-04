@@ -33,6 +33,11 @@ import { listChannels } from '../api/channels';
 
 const { Title, Text } = Typography;
 
+// DB column for rule.target_model is varchar(128) (Tech Design §3). The service
+// layer does not length-check, and on Postgres an over-long value surfaces as a
+// 500, so the input caps length here.
+const TARGET_MODEL_MAX = 128;
+
 // Clickable routing-expression examples shown under the expr field. The `expr`
 // is the literal (language-neutral) expression inserted on click; `key` maps to
 // a localized one-line description in rules.json (form.exprEx.<key>).
@@ -43,6 +48,9 @@ const EXPR_EXAMPLES = [
   { key: 'vipOrWrite', expr: 'group == "vip" || w == 1' },
   { key: 'bigPrompt', expr: 'tokens > 8000' },
   { key: 'modelAndWrite', expr: 'model == "gpt-4o" && w == 1' },
+  // Difficulty tiering (Tech Design §5): the middle tier of an
+  // opus / sonnet / haiku ladder, meant to be paired with a target model.
+  { key: 'midTier', expr: 'w == 1 || t > 150' },
 ];
 
 // Sort rules by priority ascending (lower = matched first, Tech Design §5).
@@ -138,13 +146,37 @@ export default function RoutingRules() {
 
   const sortedItems = useMemo(() => [...items].sort(byPriority), [items]);
 
+  // Live mirror of the form fields we must react to from outside the Form: the
+  // target-model suggestions and the "model not served" soft warning depend on
+  // target_channel_ids / target_group / target_model. Null until the first
+  // edit, because Semi does not fire onValueChange for the initial render.
+  //
+  // Only the three fields we actually read are mirrored, and they are copied
+  // out of Semi's values object: Semi hands onValueChange the SAME object every
+  // time (it mutates its internal values in place), so storing that reference
+  // directly would hit React's identity bail-out and never re-render.
+  //
+  // This is setState only — never call formApi.setValue() inside onValueChange
+  // (it re-triggers onValueChange and recurses; see Channels.jsx).
+  const [liveValues, setLiveValues] = useState(null);
+
+  const mirrorValues = useCallback((vals) => {
+    setLiveValues({
+      target_channel_ids: [...(vals.target_channel_ids || [])],
+      target_group: vals.target_group || '',
+      target_model: vals.target_model || '',
+    });
+  }, []);
+
   const openCreate = useCallback(() => {
     setEditing(null);
+    setLiveValues(null);
     setModalOpen(true);
   }, []);
 
   const openEdit = useCallback((record) => {
     setEditing(record);
+    setLiveValues(null);
     setModalOpen(true);
   }, []);
 
@@ -161,6 +193,13 @@ export default function RoutingRules() {
         max_tokens: m.max_tokens ?? null,
         target_channel_ids: editing.target_channel_ids || [],
         target_group: editing.target_group || '',
+        // target_model is json:"...,omitempty" server-side, so the key is
+        // absent (undefined) rather than "" when there is no override. Both
+        // mean "no override" here. NOTE: this form-level initValues is the ONLY
+        // place the saved value may be seeded — do NOT add a field-level
+        // initValue on the target_model field, it would override this and show
+        // the default instead of the saved value (the ab127e1 bug).
+        target_model: editing.target_model || '',
         expr: editing.expr || '',
       };
     }
@@ -174,9 +213,54 @@ export default function RoutingRules() {
       max_tokens: null,
       target_channel_ids: [],
       target_group: '',
+      target_model: '',
       expr: '',
     };
   }, [editing]);
+
+  // Values currently in the open dialog (falls back to what it was opened with).
+  const formValues = liveValues || initValues;
+
+  // Models the selected target channels can serve. This deliberately mirrors the
+  // backend's candidateChannels() + channelServes() exactly, because a mismatch
+  // here produces the worst kind of hint: silence about a rule that can never be
+  // served. Three rules must match:
+  //   - only ENABLED channels are candidates (the engine queries status=enabled),
+  //   - explicit target_channel_ids take PRECEDENCE and ignore target_group
+  //     entirely (the engine's if/else-if, not a union),
+  //   - a channel serves its models list PLUS its model_mapping keys (a mapping
+  //     key is an external name it answers to).
+  const targetChannelModels = useMemo(() => {
+    const enabled = channels.filter((c) => c.status === 'enabled');
+    const ids = formValues.target_channel_ids || [];
+    const group = (formValues.target_group || '').trim();
+    let picked;
+    if (ids.length) {
+      picked = enabled.filter((c) => ids.includes(c.id));
+    } else if (group) {
+      picked = enabled.filter((c) => c.group === group);
+    } else {
+      // Neither set: the rule targets every enabled channel.
+      picked = enabled;
+    }
+    const set = new Set();
+    picked.forEach((c) => {
+      (c.models || []).forEach((m) => set.add(m));
+      Object.keys(c.model_mapping || {}).forEach((m) => set.add(m));
+    });
+    return { count: picked.length, models: Array.from(set).sort() };
+  }, [channels, formValues.target_channel_ids, formValues.target_group]);
+
+  const targetModelValue = String(formValues.target_model ?? '').trim();
+
+  // Soft warning only: the model may legitimately not be listed yet (channels
+  // can be created after the rule), so saving stays allowed. Only warn once at
+  // least one target channel is actually resolved — otherwise there is nothing
+  // to compare against.
+  const targetModelUnknown =
+    targetModelValue !== '' &&
+    targetChannelModels.count > 0 &&
+    !targetChannelModels.models.includes(targetModelValue);
 
   const buildPayload = useCallback((values) => {
     const match = {};
@@ -191,6 +275,12 @@ export default function RoutingRules() {
       match,
       target_channel_ids: values.target_channel_ids || [],
       target_group: values.target_group || null,
+      // Trimmed so a whitespace-only entry is sent as "" (= no override) rather
+      // than an invisible model name. Sent unconditionally (never undefined) so
+      // clearing the field in the editor really removes the override; the
+      // row-level enable/disable toggle sends a partial payload without this
+      // key, which the API treats as "leave unchanged".
+      target_model: String(values.target_model ?? '').trim(),
       expr: (values.expr || '').trim(),
     };
   }, []);
@@ -280,6 +370,47 @@ export default function RoutingRules() {
     );
   }, [t]);
 
+  // Target summary: which channels/group serve the rule, plus the model
+  // override when the rule sets one, so operators can see at a glance which
+  // rules change the model. target_model is omitempty server-side, hence the
+  // undefined-tolerant read.
+  const renderTarget = useCallback(
+    (ids, record) => {
+      const list = ids || [];
+      const overrideModel = String(record.target_model ?? '').trim();
+      const override = overrideModel ? (
+        <Tooltip content={t('target.modelTooltip')}>
+          <Tag
+            color="green"
+            size="small"
+            style={{ fontFamily: 'var(--semi-font-family-mono, monospace)' }}
+          >
+            {t('target.model', { value: overrideModel })}
+          </Tag>
+        </Tooltip>
+      ) : null;
+      let main;
+      if (!list.length && record.target_group) {
+        main = <Tag color="violet" size="small">{t('target.group', { value: record.target_group })}</Tag>;
+      } else if (!list.length) {
+        main = <Text type="tertiary">{t('target.none')}</Text>;
+      } else {
+        main = list.map((id) => (
+          <Tag key={id} color="blue" size="small">
+            {channelName(id)}
+          </Tag>
+        ));
+      }
+      return (
+        <Space spacing={4} wrap>
+          {main}
+          {override}
+        </Space>
+      );
+    },
+    [channelName, t]
+  );
+
   const columns = useMemo(
     () => [
       { title: t('columns.priority'), dataIndex: 'priority', width: 90, sorter: byPriority, defaultSortOrder: 'ascend' },
@@ -288,22 +419,7 @@ export default function RoutingRules() {
       {
         title: t('columns.targetChannels'),
         dataIndex: 'target_channel_ids',
-        render: (ids, record) => {
-          const list = ids || [];
-          if (!list.length && record.target_group) {
-            return <Tag color="violet" size="small">{t('target.group', { value: record.target_group })}</Tag>;
-          }
-          if (!list.length) return <Text type="tertiary">{t('target.none')}</Text>;
-          return (
-            <Space spacing={4} wrap>
-              {list.map((id) => (
-                <Tag key={id} color="blue" size="small">
-                  {channelName(id)}
-                </Tag>
-              ))}
-            </Space>
-          );
-        },
+        render: renderTarget,
       },
       {
         title: t('columns.enabled'),
@@ -330,7 +446,7 @@ export default function RoutingRules() {
         ),
       },
     ],
-    [renderMatch, channelName, handleToggle, openEdit, handleDelete, t]
+    [renderMatch, renderTarget, handleToggle, openEdit, handleDelete, t]
   );
 
   return (
@@ -433,7 +549,11 @@ export default function RoutingRules() {
         maskClosable={false}
         width={600}
       >
-        <Form initValues={initValues} getFormApi={setFormApi}>
+        <Form
+          initValues={initValues}
+          getFormApi={setFormApi}
+          onValueChange={mirrorValues}
+        >
           <Form.Input
             field="name"
             label={t('form.name')}
@@ -515,6 +635,53 @@ export default function RoutingRules() {
             label={t('form.targetGroup')}
             placeholder={t('form.targetGroupPlaceholder')}
           />
+          {/* Optional model override (Tech Design §2): empty = keep the client's
+              requested model, i.e. today's behaviour. Free text on purpose (the
+              channel may be created later), so the selected channels' models are
+              offered as click-to-fill chips below rather than a closed list.
+              A plain Input (not AutoComplete) because AutoComplete builds its
+              inner Input props explicitly and drops maxLength, and maxLength is
+              what keeps the UI from producing a value the varchar(128) column
+              rejects on Postgres (a 500).
+              Deliberately NO field-level initValue here — it would shadow the
+              form-level initValues and break edit round-tripping (ab127e1). */}
+          <Form.Input
+            field="target_model"
+            label={t('form.targetModel')}
+            placeholder={t('form.targetModelPlaceholder')}
+            maxLength={TARGET_MODEL_MAX}
+            showClear
+            style={{ fontFamily: 'var(--semi-font-family-mono, monospace)' }}
+          />
+          <Text
+            type={targetModelUnknown ? 'warning' : 'tertiary'}
+            size="small"
+            style={{ display: 'block', marginTop: -8, marginBottom: 6, whiteSpace: 'pre-line' }}
+          >
+            {targetModelUnknown
+              ? t('form.targetModelNotServed', { value: targetModelValue })
+              : t('form.targetModelHelp')}
+          </Text>
+          {targetChannelModels.models.length ? (
+            <div style={{ marginBottom: 4 }}>
+              <Text type="tertiary" size="small" style={{ display: 'block', marginBottom: 4 }}>
+                {t('form.targetModelSuggestTitle')}
+              </Text>
+              <Space spacing={6} wrap>
+                {targetChannelModels.models.map((m) => (
+                  <Tag
+                    key={m}
+                    color="green"
+                    type="light"
+                    style={{ fontFamily: 'var(--semi-font-family-mono, monospace)', cursor: 'pointer' }}
+                    onClick={() => formApi && formApi.setValue('target_model', m)}
+                  >
+                    {m}
+                  </Tag>
+                ))}
+              </Space>
+            </div>
+          ) : null}
         </Form>
       </Modal>
     </div>

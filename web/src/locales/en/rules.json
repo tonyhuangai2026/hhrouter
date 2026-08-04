@@ -32,6 +32,11 @@
     "targetChannelsPlaceholder": "Select existing channels",
     "targetGroup": "Or target group (optional alternative to channels)",
     "targetGroupPlaceholder": "channel group label",
+    "targetModel": "Target model (optional override)",
+    "targetModelPlaceholder": "leave empty to keep the requested model",
+    "targetModelHelp": "Optional. When set, matched requests are served by this model instead of the one the client asked for — that is how one channel can serve several difficulty tiers (e.g. opus for hard requests, haiku for easy ones).\nThe target channel's model mapping still applies on top of it, so use the external model name here, not the upstream id.",
+    "targetModelNotServed": "None of the selected target channels lists \"{{value}}\" in its models. You can still save (the channel may be configured later), but until one serves it, matched requests will fail with no-candidate-channel.",
+    "targetModelSuggestTitle": "Models served by the selected channels (click to use):",
     "exprExamplesTitle": "Examples (click to use):",
     "exprEx": {
       "write": "next turn likely calls a tool / writes code",
@@ -39,7 +44,8 @@
       "short": "short predicted output (cheap model)",
       "vipOrWrite": "VIP key, or any tool-call turn",
       "bigPrompt": "large input context",
-      "modelAndWrite": "a specific model doing a tool call"
+      "modelAndWrite": "a specific model doing a tool call",
+      "midTier": "difficulty tiering — mid tier: a tool call or a medium-length output (pair with a target model such as sonnet, and let a lower-priority catch-all rule route the rest to a cheaper one)"
     }
   },
   "match": {
@@ -51,7 +57,9 @@
   },
   "target": {
     "none": "none",
-    "group": "group: {{value}}"
+    "group": "group: {{value}}",
+    "model": "model: {{value}}",
+    "modelTooltip": "This rule overrides the model: matched requests are served by this model instead of the one the client requested."
   },
   "validation": {
     "targetRequired": "Select at least one target channel or a target group."

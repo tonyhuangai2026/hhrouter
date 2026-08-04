@@ -107,6 +107,101 @@ func TestRuleCRUD(t *testing.T) {
 	}
 }
 
+// TestRuleTargetModel_CreateAndUpdate: target_model round-trips on create, an
+// update can change it, and omitting it (nil) leaves the stored value alone.
+func TestRuleTargetModel_CreateAndUpdate(t *testing.T) {
+	svc := NewRuleService(newRuleTestDB(t))
+
+	created, err := svc.Create(RuleInput{
+		Name:        strptr("hard-tier"),
+		TargetModel: strptr("claude-opus-4-8"),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.TargetModel != "claude-opus-4-8" {
+		t.Fatalf("TargetModel = %q, want %q", created.TargetModel, "claude-opus-4-8")
+	}
+	// Persisted, not just set on the in-memory struct.
+	got, err := svc.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.TargetModel != "claude-opus-4-8" {
+		t.Fatalf("persisted TargetModel = %q, want %q", got.TargetModel, "claude-opus-4-8")
+	}
+
+	// Explicit change.
+	upd, err := svc.Update(created.ID, RuleInput{TargetModel: strptr("claude-haiku-4-5")})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if upd.TargetModel != "claude-haiku-4-5" {
+		t.Fatalf("after Update: TargetModel = %q, want %q", upd.TargetModel, "claude-haiku-4-5")
+	}
+
+	// Omitted (nil) must not clear the existing override.
+	upd2, err := svc.Update(created.ID, RuleInput{Name: strptr("hard-tier-renamed")})
+	if err != nil {
+		t.Fatalf("Update without TargetModel: %v", err)
+	}
+	if upd2.TargetModel != "claude-haiku-4-5" {
+		t.Fatalf("partial update clobbered TargetModel: %q", upd2.TargetModel)
+	}
+
+	// Explicit "" clears the override.
+	cleared, err := svc.Update(created.ID, RuleInput{TargetModel: strptr("")})
+	if err != nil {
+		t.Fatalf("Update to empty: %v", err)
+	}
+	if cleared.TargetModel != "" {
+		t.Fatalf("explicit empty did not clear TargetModel: %q", cleared.TargetModel)
+	}
+}
+
+// TestRuleTargetModel_Trimmed: surrounding whitespace is stripped, and a
+// whitespace-only value persists as "" (no override) rather than as spaces.
+func TestRuleTargetModel_Trimmed(t *testing.T) {
+	svc := NewRuleService(newRuleTestDB(t))
+
+	created, err := svc.Create(RuleInput{
+		Name:        strptr("padded"),
+		TargetModel: strptr("  claude-sonnet-4-8\t"),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.TargetModel != "claude-sonnet-4-8" {
+		t.Fatalf("TargetModel = %q, want it trimmed", created.TargetModel)
+	}
+
+	blank, err := svc.Update(created.ID, RuleInput{TargetModel: strptr("   ")})
+	if err != nil {
+		t.Fatalf("Update with blank TargetModel: %v", err)
+	}
+	if blank.TargetModel != "" {
+		t.Fatalf("whitespace-only TargetModel persisted as %q, want empty string", blank.TargetModel)
+	}
+}
+
+// TestRuleTargetModel_NoChannelServeabilityCheck: saving a model name no channel
+// can serve must succeed — that failure is reported at request time as
+// router.ErrNoCandidate, not at configuration time (Tech Design §2.4).
+func TestRuleTargetModel_NoChannelServeabilityCheck(t *testing.T) {
+	svc := NewRuleService(newRuleTestDB(t))
+
+	created, err := svc.Create(RuleInput{
+		Name:        strptr("unknown-model"),
+		TargetModel: strptr("model-no-channel-serves"),
+	})
+	if err != nil {
+		t.Fatalf("Create with an unserved target model should succeed, got: %v", err)
+	}
+	if created.TargetModel != "model-no-channel-serves" {
+		t.Fatalf("TargetModel = %q, want it stored verbatim", created.TargetModel)
+	}
+}
+
 func TestRuleCreateValidation(t *testing.T) {
 	svc := NewRuleService(newRuleTestDB(t))
 	if _, err := svc.Create(RuleInput{Name: strptr("  ")}); err == nil {

@@ -32,6 +32,11 @@
     "targetChannelsPlaceholder": "选择已有渠道",
     "targetGroup": "或目标分组（渠道的可选替代项）",
     "targetGroupPlaceholder": "渠道分组标签",
+    "targetModel": "目标模型（可选覆写）",
+    "targetModelPlaceholder": "留空表示沿用请求的模型",
+    "targetModelHelp": "可选。填写后，命中的请求将改用这个模型，而不是客户端请求的那个——这样同一个渠道就能承载多个难度档（例如难请求用 opus，简单请求用 haiku）。\n目标渠道的模型映射仍会在此之上生效，所以这里填对外模型名，不要填上游模型 id。",
+    "targetModelNotServed": "所选目标渠道的模型列表里都没有「{{value}}」。仍然可以保存（渠道可以稍后再配），但在有渠道能服务它之前，命中的请求会因找不到候选渠道而失败。",
+    "targetModelSuggestTitle": "所选渠道可服务的模型（点击填入）：",
     "exprExamplesTitle": "示例（点击填入）：",
     "exprEx": {
       "write": "下一回合可能调用工具 / 写代码",
@@ -39,7 +44,8 @@
       "short": "预计输出很短（用便宜模型）",
       "vipOrWrite": "VIP 密钥，或任意工具调用回合",
       "bigPrompt": "输入上下文很大",
-      "modelAndWrite": "某个特定模型在调用工具"
+      "modelAndWrite": "某个特定模型在调用工具",
+      "midTier": "难度分流 · 中档：调用工具 或 输出中等长度（配合目标模型如 sonnet 使用，再用一条优先级更低的兜底规则把其余请求分给更便宜的模型）"
     }
   },
   "match": {
@@ -51,7 +57,9 @@
   },
   "target": {
     "none": "无",
-    "group": "分组：{{value}}"
+    "group": "分组：{{value}}",
+    "model": "模型：{{value}}",
+    "modelTooltip": "该规则会覆写模型：命中的请求将改用这个模型，而不是客户端请求的那个。"
   },
   "validation": {
     "targetRequired": "请至少选择一个目标渠道或填写一个目标分组。"

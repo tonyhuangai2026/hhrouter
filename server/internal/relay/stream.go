@@ -57,7 +57,10 @@ func (r *Relayer) serveStream(c *gin.Context, rc *requestContext, estPrompt int)
 			continue
 		}
 
-		upstreamModel := router.UpstreamModel(ch, rc.uni.Model)
+		// Same as the non-streaming path: resolve the upstream model id from the
+		// EFFECTIVE model (rule target_model override, else the requested model) so
+		// billing, the system-cache threshold and the log follow the override.
+		upstreamModel := router.UpstreamModel(ch, sel.EffectiveModel())
 		uni := rc.uni
 		uni.Model = upstreamModel
 		uni.Stream = true

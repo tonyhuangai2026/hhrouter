@@ -8,8 +8,9 @@
 //	                  every dimension is satisfied; no match falls back to all
 //	                  enabled channels that can serve the model.
 //	(2) Candidates  — resolve the rule's target_channel_ids / target_group to
-//	                  enabled channels whose models include the target model
-//	                  (model_mapping is considered).
+//	                  enabled channels whose models include the EFFECTIVE model
+//	                  (model_mapping is considered) — the rule's target_model when
+//	                  it overrides one, else the requested model.
 //	(3) LoadBalance — bucket candidates by descending priority, take the highest
 //	                  bucket, and pick one by weighted-random within it.
 //	(4) Failover    — the remaining candidates (in load-balanced order) are
@@ -21,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -120,12 +122,18 @@ type ProbeResult struct {
 type Selection struct {
 	// Rule is the matched routing rule, or nil when the no-rule fallback was used.
 	Rule *model.RoutingRule
-	// Model is the requested (external) model name.
+	// Model is the requested (external) model name. It stays the CLIENT's name even
+	// when the matched rule overrides the model — observability distinguishes "what
+	// was asked for" from "what actually ran" (see EffectiveModel).
 	Model string
 	// Probe is the routing-classifier prediction for this request, or nil when the
 	// probe was not invoked (no enabled rule referenced w/t).
 	Probe *ProbeResult
 
+	// effectiveModel is the external model name that actually drove candidate
+	// filtering and must drive upstream model resolution: the matched rule's
+	// TargetModel when it is set, otherwise Model. Read via EffectiveModel.
+	effectiveModel string
 	// candidates is the full load-balanced order: highest-priority bucket first
 	// (its members shuffled by weighted-random), then the remaining buckets in
 	// descending priority order.
@@ -141,6 +149,19 @@ func (s *Selection) Candidates() []model.Channel {
 	out := make([]model.Channel, len(s.candidates))
 	copy(out, s.candidates)
 	return out
+}
+
+// EffectiveModel returns the external model name that actually serves this
+// request: the matched rule's target_model when it set one, otherwise the
+// client's requested model. Callers resolving the upstream model id must feed
+// THIS (not Model) to UpstreamModel, so the channel's model_mapping is applied
+// on top of the override. It never returns empty — a Selection built without an
+// override falls back to Model.
+func (s *Selection) EffectiveModel() string {
+	if s.effectiveModel != "" {
+		return s.effectiveModel
+	}
+	return s.Model
 }
 
 // MaxRetries reports the failover attempt cap for this selection.
@@ -273,7 +294,11 @@ func (e *Engine) SelectChannel(group, requestedModel string, estTokens int) (*Se
 // top of its Match predicate. If any enabled rule's expression references the
 // probe signals (w/t), the probe is invoked ONCE (on demand) and the result is
 // fed into every expression's evaluation. Rules with no w/t reference never
-// trigger the probe. Returns ErrNoCandidate when nothing can serve the request.
+// trigger the probe.
+//
+// The matched rule's target_model (when set) becomes the selection's effective
+// model and drives candidate filtering; see Selection.EffectiveModel. Returns an
+// error wrapping ErrNoCandidate when nothing can serve the request.
 func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selection, error) {
 	// (1) Match.
 	rules, err := e.enabledRulesByPriority()
@@ -323,12 +348,39 @@ func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selectio
 	matched, matchedProg := matchRuleExpr(rules, progs, in.Group, in.Model, in.EstTokens, exprVars)
 	_ = matchedProg
 
+	// The matched rule may override which model serves the request. The override
+	// takes effect from here on: it filters candidates (a channel need only serve
+	// the TARGET model, not the requested one) and later resolves the upstream
+	// model id. With no override — and always on the no-rule fallback path — the
+	// effective model is the requested model, byte-for-byte the legacy behaviour.
+	effectiveModel := in.Model
+	if matched != nil {
+		if target := strings.TrimSpace(matched.TargetModel); target != "" {
+			effectiveModel = target
+		}
+	}
+
 	// (2) Candidates.
-	candidates, err := e.candidateChannels(matched, in.Model)
+	candidates, err := e.candidateChannels(matched, effectiveModel)
 	if err != nil {
 		return nil, err
 	}
 	if len(candidates) == 0 {
+		// Deliberately NO rule backtracking: the matched rule is the final routing
+		// decision, so a target_model nothing can serve is a hard failure rather
+		// than a silent downgrade to a lower-priority rule (which would defeat the
+		// whole point of quality-tiered routing). Name the rule and the target model
+		// so operators can tell a misconfigured override apart from a plain
+		// "nobody serves the requested model", and wrap the sentinel so
+		// errors.Is(err, ErrNoCandidate) keeps working for existing callers.
+		// The override is what makes the diagnostic useful, so key off "the rule
+		// pinned a target_model" rather than "the name differs from the request":
+		// pinning the same name the client asked for is legitimate tier config, and
+		// such a rule must still be named when nothing can serve it.
+		if matched != nil && strings.TrimSpace(matched.TargetModel) != "" {
+			return nil, fmt.Errorf("%w: rule %s target_model %q is not served by any candidate channel (request asked for %q)",
+				ErrNoCandidate, ruleIdent(matched), effectiveModel, in.Model)
+		}
 		return nil, ErrNoCandidate
 	}
 
@@ -336,13 +388,23 @@ func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selectio
 	ordered := loadBalanceOrder(candidates)
 
 	return &Selection{
-		Rule:       matched,
-		Model:      in.Model,
-		Probe:      probeResult,
-		candidates: ordered,
-		maxRetries: e.maxRetries(),
-		cursor:     0,
+		Rule:           matched,
+		Model:          in.Model,
+		Probe:          probeResult,
+		effectiveModel: effectiveModel,
+		candidates:     ordered,
+		maxRetries:     e.maxRetries(),
+		cursor:         0,
 	}, nil
+}
+
+// ruleIdent renders a human-readable identifier for a rule ("name" plus its id)
+// for error messages and logs. It is nil-safe.
+func ruleIdent(rule *model.RoutingRule) string {
+	if rule == nil {
+		return "<none>"
+	}
+	return fmt.Sprintf("%q (id %d)", rule.Name, rule.ID)
 }
 
 // enabledRulesByPriority loads enabled rules in ascending-priority order.
@@ -424,9 +486,14 @@ func ruleMatches(spec model.MatchSpec, group, requestedModel string, estTokens i
 
 // candidateChannels resolves the candidate enabled channels for a matched rule.
 // When rule is nil (no match) it falls back to every enabled channel that can
-// serve the requested model. In all cases a candidate must be enabled and have
-// the requested model in its model list (after model_mapping resolution).
-func (e *Engine) candidateChannels(rule *model.RoutingRule, requestedModel string) ([]model.Channel, error) {
+// serve the model. In all cases a candidate must be enabled and have the model in
+// its model list (after model_mapping resolution).
+//
+// effectiveModel is the model the channel must serve — the rule's target_model
+// when it overrides one, otherwise the client's requested model (see
+// SelectChannelCtx). Filtering on the effective model is what lets a single
+// channel back several difficulty tiers instead of needing one channel per model.
+func (e *Engine) candidateChannels(rule *model.RoutingRule, effectiveModel string) ([]model.Channel, error) {
 	var channels []model.Channel
 	if err := e.db.Where("status = ?", model.ChannelEnabled).Find(&channels).Error; err != nil {
 		return nil, err
@@ -461,7 +528,7 @@ func (e *Engine) candidateChannels(rule *model.RoutingRule, requestedModel strin
 				continue
 			}
 		}
-		if !channelServes(&ch, requestedModel) {
+		if !channelServes(&ch, effectiveModel) {
 			continue
 		}
 		out = append(out, ch)
@@ -469,17 +536,18 @@ func (e *Engine) candidateChannels(rule *model.RoutingRule, requestedModel strin
 	return out, nil
 }
 
-// channelServes reports whether the channel's model list includes the requested
-// model. model_mapping keys (external names) also count as served models.
-func channelServes(ch *model.Channel, requestedModel string) bool {
+// channelServes reports whether the channel's model list includes wantModel (an
+// external model name). model_mapping keys (external names) also count as served
+// models.
+func channelServes(ch *model.Channel, wantModel string) bool {
 	for _, m := range decodeModels(ch.Models) {
-		if m == requestedModel {
+		if m == wantModel {
 			return true
 		}
 	}
 	// A model_mapping entry keyed by the external model name means the channel
 	// serves that external model (mapping it to a different upstream id).
-	if _, ok := decodeMapping(ch.ModelMapping)[requestedModel]; ok {
+	if _, ok := decodeMapping(ch.ModelMapping)[wantModel]; ok {
 		return true
 	}
 	return false

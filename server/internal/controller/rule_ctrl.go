@@ -46,6 +46,9 @@ type ruleRequest struct {
 	TargetChannelIDs *[]uint          `json:"target_channel_ids"`
 	TargetGroup      *string          `json:"target_group"`
 	Expr             *string          `json:"expr"`
+	// TargetModel overrides which upstream model serves a matched request;
+	// absent leaves the stored value alone, "" clears the override.
+	TargetModel *string `json:"target_model"`
 }
 
 // toInput converts the request into the service-layer input.
@@ -58,6 +61,7 @@ func (r *ruleRequest) toInput() service.RuleInput {
 		TargetChannelIDs: r.TargetChannelIDs,
 		TargetGroup:      r.TargetGroup,
 		Expr:             r.Expr,
+		TargetModel:      r.TargetModel,
 	}
 }
 

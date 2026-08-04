@@ -280,8 +280,13 @@ func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt i
 			continue
 		}
 
-		// Resolve the upstream model id (model_mapping) for this channel.
-		upstreamModel := router.UpstreamModel(ch, rc.uni.Model)
+		// Resolve the upstream model id (model_mapping) for this channel. The input
+		// is the EFFECTIVE model (the matched rule's target_model when it overrode
+		// one, else the client's requested model), so an override flows into every
+		// downstream consumer of upstreamModel at once: the price lookup, the
+		// system-cache threshold, request_logs.upstream_model and the Bedrock
+		// inference-profile prefix.
+		upstreamModel := router.UpstreamModel(ch, sel.EffectiveModel())
 		uni := rc.uni
 		uni.Model = upstreamModel
 		// Auto-inject a system prompt-cache breakpoint when this channel opted in
@@ -355,13 +360,43 @@ func (r *Relayer) serveNonStream(c *gin.Context, rc *requestContext, estPrompt i
 }
 
 // failNoChannel handles the case where the engine found no candidate channel.
+//
+// The message is built so the SAME text reaches the caller (error response body)
+// and the operator (request_logs.error_message):
+//
+//   - ErrNoCandidate with no extra detail (the engine's bare sentinel — i.e. the
+//     matched rule pinned no target_model): the legacy wording, byte-for-byte, so
+//     existing triage habits keep working.
+//   - ErrNoCandidate WITH detail (the matched rule pinned a target_model nothing
+//     can serve): the engine's text — which names the rule and the target_model —
+//     is appended. Discarding it here would strand the only information that
+//     identifies the misconfiguration, since rc.uni.Model is the REQUESTED name
+//     and says nothing about the override that actually failed.
+//   - any other routing error: surfaced verbatim as before.
+//
+// The errors.Is detection and the 502 status are unchanged.
 func (r *Relayer) failNoChannel(c *gin.Context, rc *requestContext, err error, estPrompt int, stream bool, start time.Time) {
 	msg := "no upstream channel can serve model \"" + rc.uni.Model + "\""
 	if !errors.Is(err, router.ErrNoCandidate) {
 		msg = "routing failed: " + err.Error()
+	} else if detail := noCandidateDetail(err); detail != "" {
+		msg += ": " + detail
 	}
 	WriteOutError(c, rc.outFormat, http.StatusBadGateway, ClassUpstream, msg)
 	r.finish(rc, attempt{}, nil, model.LogError, http.StatusBadGateway, msg, estPrompt, 0, estPrompt, stream, time.Since(start), nil, nil)
+}
+
+// noCandidateDetail extracts the diagnostic the engine wrapped around
+// ErrNoCandidate (rule identifier + target_model), stripping the sentinel's own
+// text so it is not repeated inside the relay's message. It returns "" for the
+// bare sentinel, which is what keeps the no-override message format intact.
+func noCandidateDetail(err error) string {
+	full := err.Error()
+	sentinel := router.ErrNoCandidate.Error()
+	if full == sentinel {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(full, sentinel), ":"))
 }
 
 // failUpstream handles a non-retryable upstream error: it propagates the upstream
