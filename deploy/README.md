@@ -9,12 +9,12 @@ Two templates, two availability postures. Pick one:
 
 Both put an ALB in front, so the public URL is stable either way.
 
-- [Option 1 — single EC2](#option-1--single-ec2-cloudformationyml)
-- [Option 2 — ECS Fargate](#option-2--ecs-fargate-cloudformation-ecsyml)
+- [Option 1 — single EC2](#option-1--single-ec2-cloudformationyml) — one box, new VPC created for you
+- [Option 2 — ECS Fargate](#option-2--ecs-fargate-cloudformation-ecsyml) — HA app tier, bring your own VPC
 
 ---
 
-# Option 1 — single EC2 (`cloudformation.yml`)
+## Option 1 — single EC2 (`cloudformation.yml`)
 
 `cloudformation.yml` stands up the full Agent Router Platform on AWS in one stack:
 
@@ -28,7 +28,7 @@ Both put an ALB in front, so the public URL is stable either way.
 The stack output **`AlbUrl`** is the public address — open it in a browser; the first
 account you register becomes admin.
 
-## Deploy
+### Deploy (single EC2)
 
 ```bash
 aws cloudformation deploy \
@@ -55,7 +55,7 @@ aws cloudformation describe-stacks --region us-east-1 --stack-name agent-router 
 Stack creation waits (up to 20 min, `CreationPolicy`) for the instance to finish the
 Docker build and signal success, so when `deploy` returns the app is already serving.
 
-## Key parameters
+### Key parameters (single EC2)
 
 | Parameter | Required | Default | Notes |
 |-----------|----------|---------|-------|
@@ -69,11 +69,11 @@ Docker build and signal success, so when `deploy` returns the app is already ser
 | `AdminUsername` / `AdminPassword` | no | empty | If both set, an admin is seeded on first start (otherwise register via the UI). |
 | `SshAllowedCidr` + `KeyName` | no | empty | Set both to enable SSH `:22` from that CIDR for debugging. |
 
-## Updating an existing deployment
+### Updating an existing deployment
 
 After you push new code to the repo, there are two ways to roll it out.
 
-### Option A — CloudFormation redeploy (clean, replaces the instance)
+#### Option A — CloudFormation redeploy (clean, replaces the instance)
 
 Bump the `DeployVersion` parameter and run `update-stack`. Changing it alters the
 instance's UserData, so CloudFormation **replaces** the instance: a fresh box
@@ -104,7 +104,7 @@ aws cloudformation update-stack \
 > fine while still configuring, but for a live deployment with real data prefer
 > Option B, or move the database to RDS first.
 
-### Option B — in-place update (keeps data + URL, needs SSH)
+#### Option B — in-place update (keeps data + URL, needs SSH)
 
 Deploy SSH access (`SshAllowedCidr` + `KeyName`), then on the box:
 
@@ -118,7 +118,7 @@ docker compose --env-file .env up -d --build   # rebuilds only changed images
 This rebuilds the containers in place — Postgres/Redis volumes are untouched, so
 all data and the ALB URL survive.
 
-## Notes & limitations
+### Notes & limitations (single EC2)
 
 - **HTTP only.** Per the chosen scope this exposes plain HTTP on the ALB DNS name. For a
   real domain + HTTPS, add an ACM cert and a `:443` listener (the existing prod box uses
@@ -131,11 +131,10 @@ all data and the ALB URL survive.
   `/var/log/arp-bootstrap.log`.
 - **Teardown:** `aws cloudformation delete-stack --stack-name agent-router`. The VPC, ALB,
   instance, and EBS volume are all deleted with the stack.
-```
 
 ---
 
-# Option 2 — ECS Fargate (`cloudformation-ecs.yml`)
+## Option 2 — ECS Fargate (`cloudformation-ecs.yml`)
 
 Removes the single-node failure mode: the application runs as **2 Fargate tasks
 across 2 AZs** behind an ALB, and the state that cannot live in a container moves
@@ -165,7 +164,7 @@ state that had to move was PostgreSQL. Redis is *not* authoritative: quota
 counters lazily reseed from the DB's `used_quota` columns and the channel model
 list is a 10-minute cache, so losing that node costs seconds of accuracy, not data.
 
-## Prerequisites: the VPC
+### Prerequisites: the VPC
 
 This template **does not create a VPC** — you pass one in. (Accounts routinely sit
 at the 5-VPC default limit, and blocking a deployment on a quota increase is the
@@ -181,7 +180,7 @@ What the VPC must provide:
 | **Free CIDR space for two /20 private subnets** | The template creates them (`PrivateSubnetACidr` / `PrivateSubnetBCidr`) for the tasks, RDS and Redis. Defaults assume a `10.20.0.0/16` VPC — override if yours differs. |
 | `enableDnsSupport` + `enableDnsHostnames` | The tasks resolve the RDS and ElastiCache endpoints by DNS name. |
 
-### Creating a fresh VPC for this stack
+#### Creating a fresh VPC for this stack
 
 If the customer wants a dedicated VPC, this is the layout to create. **Check the
 VPC quota first** — the default limit is 5 per region, and hitting it is the most
@@ -233,7 +232,7 @@ so with this layout you do not need to override the CIDR parameters.
 > Deleting the stack does **not** delete a VPC you created yourself. Tear it down
 > separately (and note the stack's NAT gateway + its EIP do go away with the stack).
 
-## Build and push the images
+### Build and push the images
 
 Fargate pulls images from a registry, so unlike Option 1 there is no build-on-box
 step. Build once and push to ECR:
@@ -256,7 +255,7 @@ docker push $REG/agent-router-platform-backend:$TAG
 docker push $REG/agent-router-platform-frontend:$TAG
 ```
 
-## Deploy
+### Deploy (ECS)
 
 ```bash
 aws cloudformation deploy \
@@ -286,7 +285,7 @@ aws cloudformation describe-stacks --region us-east-1 --stack-name agent-router-
   --query "Stacks[0].Outputs[?OutputKey=='Url'].OutputValue" --output text
 ```
 
-## Key parameters
+### Key parameters (ECS)
 
 | Parameter | Required | Default | Notes |
 |-----------|----------|---------|-------|
@@ -303,7 +302,7 @@ aws cloudformation describe-stacks --region us-east-1 --stack-name agent-router-
 | `DbMultiAZ` | no | `false` | `true` adds automatic DB failover (roughly doubles the RDS cost). |
 | `DbInstanceClass` / `CacheNodeType` | no | `db.t4g.micro` / `cache.t4g.micro` | Adequate for this workload's config + log traffic. |
 
-## Rolling out new code
+### Rolling out new code
 
 Build and push a new tag, then point the service at it. ECS performs a rolling
 replacement (`MinimumHealthyPercent: 100`, so capacity never dips), and the
@@ -323,7 +322,7 @@ aws cloudformation deploy \
 
 Unlike Option 1, a rollout does **not** touch the data: Postgres is in RDS.
 
-## Custom domain + HTTPS
+### Custom domain + HTTPS
 
 1. Request an ACM certificate for the domain **in the same region as the ALB**.
 2. Point a Route53 ALIAS (or a CNAME) at the `AlbDnsName` output; the ALIAS target
@@ -331,7 +330,7 @@ Unlike Option 1, a rollout does **not** touch the data: Postgres is in RDS.
 3. Update the stack with `CertificateArn=arn:aws:acm:...`. The template then
    creates the `:443` listener and turns `:80` into a redirect.
 
-## Migrating data from a single-EC2 deployment
+### Migrating data from a single-EC2 deployment
 
 ```bash
 # on the old box
@@ -345,7 +344,7 @@ Deploy the ECS stack with the **same `SecretKey`** as the old deployment first �
 channel credentials are AES-GCM encrypted with it, and a new key makes them
 unreadable. Redis needs no migration (it rebuilds itself from the database).
 
-## Notes & limitations
+### Notes & limitations (ECS)
 
 - **SSE and the ALB idle timeout.** `/v1/*` responses stream; to a load balancer a
   model that is still thinking looks like an idle connection. `AlbIdleTimeout`

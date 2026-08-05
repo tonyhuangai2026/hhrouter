@@ -434,4 +434,3 @@ docker-compose.yml four services: postgres / redis / backend / frontend
 
 For the full technical design see the project's Tech Design document (Agent Router
 Platform MVP) — §2 layout, §10 deployment, §11 non-functional/security.
-```
