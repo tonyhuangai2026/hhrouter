@@ -8,9 +8,10 @@
 //	                  every dimension is satisfied; no match falls back to all
 //	                  enabled channels that can serve the model.
 //	(2) Candidates  — resolve the rule's target_channel_ids / target_group to
-//	                  enabled channels whose models include the EFFECTIVE model
-//	                  (model_mapping is considered) — the rule's target_model when
-//	                  it overrides one, else the requested model.
+//	                  enabled channels. Channel routing takes PRECEDENCE: when the
+//	                  rule names targets, the model name does not filter them
+//	                  further. Only when the rule names none (and on the no-rule
+//	                  fallback) must a channel serve the requested model.
 //	(3) LoadBalance — bucket candidates by descending priority, take the highest
 //	                  bucket, and pick one by weighted-random within it.
 //	(4) Failover    — the remaining candidates (in load-balanced order) are
