@@ -38,13 +38,43 @@ func TestBuildOpenAIResponse_CacheUsage(t *testing.T) {
 	if usage["prompt_tokens"] != 100 || usage["completion_tokens"] != 20 || usage["total_tokens"] != 120 {
 		t.Fatalf("base usage = %+v, want 100/20/120", usage)
 	}
-	// OpenAI renders cache-read under prompt_tokens_details.cached_tokens; no write.
+	// Both cache buckets are reported under prompt_tokens_details: cached_tokens is
+	// OpenAI's own field for hits, and cache_creation_tokens carries the write count
+	// that OpenAI's schema has no field for (omitting it made a Bedrock channel look
+	// like it never wrote to cache when driven from an OpenAI client).
 	details, ok := usage["prompt_tokens_details"].(map[string]any)
 	if !ok {
 		t.Fatalf("prompt_tokens_details missing/not a map: %+v", usage)
 	}
 	if details["cached_tokens"] != 30 {
 		t.Errorf("cached_tokens = %v, want 30", details["cached_tokens"])
+	}
+	if details["cache_creation_tokens"] != 20 {
+		t.Errorf("cache_creation_tokens = %v, want 20", details["cache_creation_tokens"])
+	}
+	// prompt_tokens is deliberately NOT inflated by the cache buckets: it is an
+	// existing field clients meter on, and Usage.PromptTokens holds the upstream's
+	// cache-excluding count.
+	if usage["prompt_tokens"] != 100 {
+		t.Errorf("prompt_tokens = %v, want the upstream 100 (unchanged)", usage["prompt_tokens"])
+	}
+}
+
+// A write-only response (first call of a cache pair) must still report the write.
+// This is the exact case the customer saw as "no write cache" on an OpenAI client.
+func TestBuildOpenAIResponse_WriteOnlyCacheUsage(t *testing.T) {
+	u := Usage{PromptTokens: 7, CompletionTokens: 4, TotalTokens: 11, CacheWriteTokens: 53974, HasUpstream: true}
+	r := UnifiedResponse{Model: "gpt-4o", Content: []ContentBlock{TextBlock("hi")}, StopReason: StopEndTurn, Usage: u}
+	usage := BuildOpenAIResponse(r)["usage"].(map[string]any)
+	details, ok := usage["prompt_tokens_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("write-only usage must carry prompt_tokens_details: %+v", usage)
+	}
+	if details["cache_creation_tokens"] != 53974 {
+		t.Errorf("cache_creation_tokens = %v, want 53974", details["cache_creation_tokens"])
+	}
+	if _, present := details["cached_tokens"]; present {
+		t.Errorf("no cache hit occurred, so cached_tokens must be absent: %+v", details)
 	}
 }
 
@@ -134,6 +164,9 @@ func TestBuildOpenAIStreamChunk_CacheUsage(t *testing.T) {
 	}
 	if details["cached_tokens"] != 30 {
 		t.Errorf("stream cached_tokens = %v, want 30", details["cached_tokens"])
+	}
+	if details["cache_creation_tokens"] != 20 {
+		t.Errorf("stream cache_creation_tokens = %v, want 20", details["cache_creation_tokens"])
 	}
 
 	// Zero cache → no details key on the stream chunk usage.

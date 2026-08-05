@@ -312,16 +312,37 @@ func addCacheUsageAnthropic(m map[string]any, u Usage) {
 	}
 }
 
-// addCacheUsageOpenAI renders the prompt-cache read count into an OpenAI usage map
-// under prompt_tokens_details.cached_tokens. OpenAI reports no separate cache-write
-// count, so only the read bucket is mapped, and only when non-zero (kept absent
-// otherwise for backward compatibility).
+// addCacheUsageOpenAI renders the prompt-cache counts into an OpenAI usage map
+// under prompt_tokens_details. Cache hits go to cached_tokens, the field OpenAI
+// itself defines. Cache WRITES have no OpenAI equivalent — the concept does not
+// exist in that schema — so they are reported alongside as cache_creation_tokens,
+// borrowing Anthropic's wording. An extra JSON field is ignored by clients that
+// do not know it, whereas omitting the count entirely is what made a Bedrock
+// channel look like it never wrote to cache when driven from an OpenAI client.
+//
+// The whole object stays absent when neither count is present, so a no-cache
+// response keeps its previous shape.
+//
+// NOTE on prompt_tokens: OpenAI defines it as INCLUDING cached_tokens, while
+// Anthropic/Bedrock report input_tokens EXCLUDING the cache buckets, and that
+// upstream value is what Usage.PromptTokens carries. We deliberately do not add
+// the cache tokens back into prompt_tokens: it is an existing field that clients
+// already meter on, and silently inflating it would be a breaking change. The
+// consequence is that prompt_tokens can be smaller than cached_tokens here, which
+// is why the two are documented rather than reconciled.
 func addCacheUsageOpenAI(m map[string]any, u Usage) {
 	if m == nil {
 		return
 	}
+	details := map[string]any{}
 	if u.CacheReadTokens > 0 {
-		m["prompt_tokens_details"] = map[string]any{"cached_tokens": u.CacheReadTokens}
+		details["cached_tokens"] = u.CacheReadTokens
+	}
+	if u.CacheWriteTokens > 0 {
+		details["cache_creation_tokens"] = u.CacheWriteTokens
+	}
+	if len(details) > 0 {
+		m["prompt_tokens_details"] = details
 	}
 }
 
