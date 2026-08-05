@@ -5,12 +5,12 @@ Two templates, two availability postures. Pick one:
 | Template | Topology | Use when |
 |----------|----------|----------|
 | `cloudformation.yml` | 1 EC2 running docker-compose, new VPC created for you | PoC / demo. Cheapest (~$16/mo). **Losing the instance loses the data** — Postgres lives on its EBS volume. |
-| `cloudformation-ecs.yml` | ECS Fargate, 2 tasks across 2 AZs, RDS + ElastiCache | Anything real. ~$70/mo. A task or an AZ can die without an outage; data outlives the compute. |
+| `cloudformation-ecs.yml` | ECS on EC2 (Graviton), 2 tasks pinned one-per-instance across 2 AZs, RDS + ElastiCache | Anything real. ~$120/mo. A task, an instance or an AZ can die without an outage; data outlives the compute. |
 
 Both put an ALB in front, so the public URL is stable either way.
 
 - [Option 1 — single EC2](#option-1--single-ec2-cloudformationyml) — one box, new VPC created for you
-- [Option 2 — ECS Fargate](#option-2--ecs-fargate-cloudformation-ecsyml) — HA app tier, bring your own VPC
+- [Option 2 — ECS on EC2](#option-2--ecs-on-ec2-cloudformation-ecsyml) — HA app tier, bring your own VPC
 
 ---
 
@@ -134,11 +134,14 @@ all data and the ALB URL survive.
 
 ---
 
-## Option 2 — ECS Fargate (`cloudformation-ecs.yml`)
+## Option 2 — ECS on EC2 (`cloudformation-ecs.yml`)
 
-Removes the single-node failure mode: the application runs as **2 Fargate tasks
-across 2 AZs** behind an ALB, and the state that cannot live in a container moves
-to managed services.
+Removes the single-node failure mode: the application runs as **2 tasks on 2
+separate EC2 container instances across 2 AZs** behind an ALB, and the state that
+cannot live in a container moves to managed services.
+
+Instances default to **c6g.large (Graviton / arm64)**, so **the images must be built
+for arm64** — see [Build and push the images](#build-and-push-the-images).
 
 ```
         Internet
@@ -147,8 +150,9 @@ to managed services.
     │     ALB     │   idle_timeout 300s ← required for SSE
     └──────┬──────┘
     ┌──────┴───────────────┐  private subnets, 2 AZs
-    │  ECS Fargate task    │  frontend nginx :80 ─┐ same network namespace,
-    │  (×2, one per AZ)    │  backend Go   :3000 ─┘ so nginx talks to 127.0.0.1
+    │  ECS task on EC2     │  frontend nginx :80 ─┐ awsvpc = one namespace,
+    │  c6g.large ×3, one   │  backend Go   :3000 ─┘ so nginx talks to 127.0.0.1
+    │  task per instance   │  (3rd instance = deploy headroom)
     └──────┬───────────┬───┘
            │           └──────────► NAT ──► Bedrock / gateways / SageMaker probe
     ┌──────▼──────┐  ┌─────────────┐
@@ -234,8 +238,9 @@ so with this layout you do not need to override the CIDR parameters.
 
 ### Build and push the images
 
-Fargate pulls images from a registry, so unlike Option 1 there is no build-on-box
-step. Build once and push to ECR:
+ECS pulls images from a registry, so unlike Option 1 there is no build-on-box step.
+**With the default c6g.large the images must be arm64** — an amd64 image simply
+fails to start on Graviton. Build cross-platform with buildx:
 
 ```bash
 REGION=us-east-1
@@ -249,11 +254,26 @@ for r in agent-router-platform-backend agent-router-platform-frontend; do
 done
 
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REG
-docker build -t $REG/agent-router-platform-backend:$TAG  ./server
-docker build -t $REG/agent-router-platform-frontend:$TAG ./web
-docker push $REG/agent-router-platform-backend:$TAG
-docker push $REG/agent-router-platform-frontend:$TAG
+
+# One-time on an x86 build host: register the arm64 emulator, or buildx will
+# report "no match for platform in manifest".
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx create --use --name armbuilder    # if you have no buildx builder yet
+
+docker buildx build --platform linux/arm64 -t $REG/agent-router-platform-backend:$TAG  --push ./server
+docker buildx build --platform linux/arm64 -t $REG/agent-router-platform-frontend:$TAG --push ./web
 ```
+
+Confirm what you actually pushed before deploying — this is the single most common
+way this deployment fails:
+
+```bash
+docker buildx imagetools inspect $REG/agent-router-platform-backend:$TAG \
+  --format '{{.Image.Platform.OS}}/{{.Image.Platform.Architecture}}'   # want linux/arm64
+```
+
+For x86 instances instead (e.g. `InstanceType=c6i.large`), drop the `--platform`
+flag and set `InstanceArchitecture=x86_64` plus the x86 AMI path in `EcsAmiId`.
 
 ### Deploy (ECS)
 
@@ -266,6 +286,10 @@ aws cloudformation deploy \
   --parameter-overrides \
       VpcId=vpc-xxxxxxxx \
       PublicSubnetIds=subnet-aaaa\\,subnet-bbbb \
+      InstanceType=c6g.large \
+      InstanceArchitecture=arm64 \
+      ClusterSize=3 \
+      DesiredCount=2 \
       BackendImage=$REG/agent-router-platform-backend:$TAG \
       FrontendImage=$REG/agent-router-platform-frontend:$TAG \
       JwtSecret="$(openssl rand -hex 32)" \
@@ -296,7 +320,12 @@ aws cloudformation describe-stacks --region us-east-1 --stack-name agent-router-
 | `SecretKey` | **yes** | — | AES-GCM key for stored channel credentials. **When migrating an existing database this must be the old value**, or every stored channel key becomes undecryptable. |
 | `PostgresPassword` | **yes** | — | RDS master password. RDS forbids `/`, `@`, `"` and spaces. |
 | `PrivateSubnetACidr` / `BCidr` | no | `10.20.32.0/20`, `10.20.48.0/20` | Must be free inside the VPC's range. |
-| `DesiredCount` | no | `2` | Keep ≥2 — with one task there is nothing to fail over to. |
+| `InstanceType` | no | `c6g.large` | Container instance type. Graviton/arm64 by default — **images must match**. |
+| `InstanceArchitecture` | no | `arm64` | Must agree with `InstanceType`, `EcsAmiId` and the pushed images. Sets the task definition's `CpuArchitecture`. |
+| `EcsAmiId` | no | arm64 ECS-optimized AMI (SSM alias) | Resolved from SSM so new instances get the current patched image. For x86 use `/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id`. |
+| `ClusterSize` | no | `3` | Instances (ASG min = max = desired). Should be `DesiredCount + 1`: tasks are pinned one-per-instance, so the spare is the headroom a rolling deploy / AZ rebalance needs. |
+| `TaskCpu` / `TaskMemory` | no | `1536` / `3072` | Per-task reservation and hard memory cap. Must fit the instance (c6g.large registers 2048 CPU units / ~3906 MiB). |
+| `DesiredCount` | no | `2` | Keep ≥2 — with one task there is nothing to fail over to. Must be ≤ `ClusterSize - 1`. |
 | `CertificateArn` | no | empty | ACM cert. When set, the ALB serves HTTPS `:443` and redirects `:80`. When blank, plain HTTP only (fine for the `*.elb.amazonaws.com` smoke test). |
 | `AlbIdleTimeout` | no | `300` | Seconds. Must exceed the longest streaming response — see the SSE note below. |
 | `DbMultiAZ` | no | `false` | `true` adds automatic DB failover (roughly doubles the RDS cost). |
@@ -365,6 +394,35 @@ unreadable. Redis needs no migration (it rebuilds itself from the database).
   snapshot separately once you are sure.
 - **Container logs** go to the CloudWatch log group named by the `LogGroupName`
   output (`/ecs/<stack>`), with `backend`/`frontend` stream prefixes.
+- **Failure behaviour, as measured.** Drills against a live stack, sending one
+  request per second throughout:
+
+  | Event | Result |
+  |---|---|
+  | `ecs stop-task` (graceful drain) | 75/75 requests OK |
+  | Rolling redeploy (`--force-new-deployment`) | 70/70 requests OK |
+  | `ec2 terminate-instances` on the instance running a task | 109/110 OK — one failure ~6s after the kill |
+
+  The single failure is inherent to an *ungraceful* loss: terminating an instance
+  takes its task ENI with it instantly, and nothing tells the ALB until a health
+  check fails. That is why the health check is 5s/2-strikes rather than the
+  15s/3-strikes this template originally had — at the looser setting the same drill
+  lost 2 requests. Planned replacements (deploys, ASG cycling) drain first and lose
+  nothing.
+
+- **Tasks are pinned one per instance** (`distinctInstance`), which is deliberate
+  and load-bearing. With `spread` alone, a drill showed ECS packing BOTH tasks onto
+  whichever instance had spare capacity after a replacement, and availability-zone
+  rebalancing did not move them within 6 minutes — leaving the service one instance
+  failure away from a full outage. The cost of the constraint is the spare instance
+  (`ClusterSize = DesiredCount + 1`), since a rolling deploy needs somewhere to put
+  the replacement task and cannot double up.
+- **`MaximumPercent` must stay above 100.** ECS rejects the service outright with
+  *"Availability Zone Rebalancing does not support maximumPercent <= 100"*, because
+  rebalancing starts a replacement before draining the original.
+- **ENI budget caps tasks per instance.** Under `awsvpc` every task consumes an ENI,
+  and c6g.large allows 3 (one is the instance's own) — so 2 tasks per instance is
+  the ceiling even without the placement constraint.
 - **The routing probe is not part of this stack.** Its SageMaker endpoint is
   configured at runtime in the admin UI, so it can be repointed without a
   redeploy — which also means a dead endpoint is recovered by recreating it and

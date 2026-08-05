@@ -10,7 +10,7 @@ request logging with an analytics dashboard.
 - **Frontend** — React + Vite + Semi Design (`/web`)
   - 界面语言：中/英，自动检测可手动切换 / UI language: Chinese & English, auto-detected and switchable
 - **Data** — PostgreSQL 16 (durable) + Redis 7 (quota counters, model cache)
-- **Deploy** — `docker compose up -d` for local/PoC, or **ECS Fargate + RDS + ElastiCache**
+- **Deploy** — `docker compose up -d` for local/PoC, or **ECS on EC2 + RDS + ElastiCache**
   for a highly available deployment (see [Deployment options](#deployment-options))
 
 ---
@@ -104,10 +104,10 @@ data on one machine — lose it and you lose both. Two CloudFormation templates 
 
 | | `docker compose` / `cloudformation.yml` | `cloudformation-ecs.yml` |
 |---|---|---|
-| **Topology** | one box: app + postgres + redis | ECS Fargate, 2 tasks across 2 AZs, ALB in front |
+| **Topology** | one box: app + postgres + redis | ECS on EC2 (Graviton), 2 tasks on separate instances across 2 AZs, ALB in front |
 | **Data** | on the box's disk | **RDS PostgreSQL** + **ElastiCache Redis** |
-| **A node dies** | outage until it is rebuilt; disk data is lost with the instance | no outage — ECS reschedules, ALB stops routing to the unhealthy task |
-| **Cost (rough)** | ~$16/mo | ~$70/mo (Fargate + NAT + RDS + Redis + ALB) |
+| **A node dies** | outage until it is rebuilt; disk data is lost with the instance | no outage — ECS reschedules onto the spare instance, the ASG replaces the dead one, ALB stops routing to unhealthy targets |
+| **Cost (rough)** | ~$16/mo | ~$120/mo (3x c6g.large + NAT + RDS + Redis + ALB) |
 | **Good for** | PoC, demo, local dev | anything carrying real traffic |
 
 The application is **stateless** — it writes nothing to local disk, holds no in-process
@@ -125,6 +125,9 @@ Two things worth knowing before running behind a load balancer:
 - **The ECS template takes an existing `VpcId`.** Bring your own VPC (fresh or existing) —
   [deploy/README.md](deploy/README.md) lists exactly what it must provide and includes a
   script that creates a conforming one.
+- **Instances default to Graviton (arm64), so the images must be arm64.** An amd64 image
+  will not start on c6g.large; build with `docker buildx --platform linux/arm64`, or switch
+  `InstanceType`/`InstanceArchitecture`/`EcsAmiId` to x86.
 
 ---
 
@@ -359,7 +362,7 @@ All variables are documented in [`.env.example`](./.env.example). Key ones:
 | `SECRET_KEY`                      | **yes**  | —              | Encrypts stored channel keys (AES-256-GCM)         |
 | `GIN_MODE`                        | no       | `release`      | `release` / `debug` / `test`                       |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | no     | empty          | If both set, seed an admin on first start          |
-| `BACKEND_ORIGIN`                  | no       | `backend:3000` | *frontend container only, set per-topology rather than via `.env`* — where nginx proxies `/api` and `/v1`. `docker-compose.yml` pins it to `backend:3000`; the ECS template sets `127.0.0.1:3000`, since Fargate gives both containers one network namespace and no service DNS. |
+| `BACKEND_ORIGIN`                  | no       | `backend:3000` | *frontend container only, set per-topology rather than via `.env`* — where nginx proxies `/api` and `/v1`. `docker-compose.yml` pins it to `backend:3000`; the ECS template sets `127.0.0.1:3000`, since `awsvpc` gives both containers one network namespace and no service DNS. |
 
 > `SECRET_KEY` may be any length: the server derives a 32-byte AES-256 key from it with
 > SHA-256. Use a long random value in production. Changing it later makes previously
@@ -423,11 +426,11 @@ with `npm run build` (outputs `web/dist`, which the nginx container serves in pr
   internal/        model, db, middleware, service, router engine, adapters, relay, controllers
 /web               React + Vite + Semi Design SPA (Dockerfile = build → nginx)
   nginx.conf.template  serves dist + reverse-proxies /api and /v1 to $BACKEND_ORIGIN
-                       (backend:3000 under compose, 127.0.0.1:3000 under ECS Fargate,
+                       (backend:3000 under compose, 127.0.0.1:3000 under ECS awsvpc,
                         where both containers share one network namespace)
 docker-compose.yml four services: postgres / redis / backend / frontend
 /deploy            CloudFormation: cloudformation.yml (single EC2) and
-                   cloudformation-ecs.yml (ECS Fargate + RDS + ElastiCache); see
+                   cloudformation-ecs.yml (ECS on EC2 + RDS + ElastiCache); see
                    deploy/README.md
 .env.example       all configuration variables with defaults
 ```

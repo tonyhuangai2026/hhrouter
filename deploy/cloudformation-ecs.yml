@@ -1,13 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Agent Router Platform - ECS Fargate deployment (highly available application tier).
+  Agent Router Platform - ECS on EC2 deployment (highly available application tier).
   Attaches to an EXISTING VPC (pass VpcId + two public subnets), adds private
-  subnets across two AZs, an internet-facing
-  ALB, an ECS Fargate service running the backend and frontend containers (2
-  tasks by default, spread across AZs), RDS PostgreSQL and ElastiCache Redis.
-  Unlike the single-EC2 template, losing one AZ or one task does not take the
-  platform down: ECS reschedules automatically and the ALB stops routing to
-  unhealthy targets.
+  subnets across two AZs, an internet-facing ALB, an ECS cluster backed by an
+  Auto Scaling group of container instances (c6g.large / Graviton by default, one
+  per AZ), RDS PostgreSQL and ElastiCache Redis.
+
+  Unlike the single-EC2 template, losing one AZ, one instance or one task does not
+  take the platform down: ECS reschedules onto the surviving instance, the ASG
+  replaces the dead one, and the ALB stops routing to unhealthy targets.
 
   The application itself is stateless — it writes nothing to local disk — so the
   only state that had to move off the box is PostgreSQL (authoritative) and Redis
@@ -59,20 +60,66 @@ Parameters:
     MinValue: 1
     MaxValue: 10
     Description: >
-      Number of Fargate tasks. Keep >= 2 for availability: with 1 task there is
-      nothing to fail over to, which defeats the purpose of this template.
+      Number of tasks. Keep >= 2 for availability: with 1 task there is nothing to
+      fail over to, which defeats the purpose of this template. Bounded by ENI
+      capacity — see the InstanceType note.
+
+  InstanceType:
+    Type: String
+    Default: c6g.large
+    Description: >
+      EC2 instance type for the container instances. c6g.large is Graviton
+      (arm64) — the container images MUST be built for arm64 or the tasks will
+      fail to start. Switch to an x86 type (e.g. c6i.large) if your images are
+      amd64, and set InstanceArchitecture to match.
+
+  InstanceArchitecture:
+    Type: String
+    Default: arm64
+    AllowedValues: [arm64, x86_64]
+    Description: >
+      Must match InstanceType's architecture AND the pushed images. It selects
+      both the ECS-optimized AMI and the task definition's CpuArchitecture.
+
+  EcsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/arm64/recommended/image_id
+    Description: >
+      ECS-optimized AMI, resolved from the SSM public parameter store so a fresh
+      instance always gets the current patched image. MUST match
+      InstanceArchitecture — for x86_64 use
+      /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id.
+
+  ClusterSize:
+    Type: Number
+    Default: 3
+    MinValue: 2
+    MaxValue: 6
+    Description: >
+      Number of container instances (ASG desired = min = max). Should be
+      DesiredCount + 1: tasks are pinned one-per-instance (distinctInstance), so
+      the extra instance is the headroom a rolling deploy or an AZ rebalance needs
+      to start a replacement task before draining the old one. With
+      DesiredCount 2 that means 3 instances, of which one is idle at steady state.
 
   TaskCpu:
-    Type: String
-    Default: "1024"
-    AllowedValues: ["512", "1024", "2048", "4096"]
-    Description: Fargate task CPU units (1024 = 1 vCPU) shared by both containers.
+    Type: Number
+    Default: 1536
+    Description: >
+      CPU units RESERVED per task (1024 = 1 vCPU). Under the EC2 launch type this
+      is a scheduling reservation against the instance's capacity, not a hard cap
+      on bursting. c6g.large registers 2048 units; 1536 leaves headroom for the
+      ECS agent while still guaranteeing the task most of the box, since
+      distinctInstance already gives it the instance to itself.
 
   TaskMemory:
-    Type: String
-    Default: "2048"
-    AllowedValues: ["1024", "2048", "3072", "4096", "8192"]
-    Description: Fargate task memory (MiB). Must be a valid pairing with TaskCpu.
+    Type: Number
+    Default: 3072
+    Description: >
+      Hard memory limit per task (MiB), shared by both containers. Must fit the
+      instance: c6g.large registers ~3906 MiB after the agent's overhead, so 3072
+      fits with margin. A task exceeding this is killed, so do not set it to the
+      full registered amount.
 
   # ---- Data tier ----
   DbInstanceClass:
@@ -171,7 +218,7 @@ Resources:
   # VPC, internet gateway and public subnets are pre-existing (passed in as
   # parameters). Only the private tier is created here.
 
-  # ---- Private subnets (Fargate tasks, RDS, Redis) ----
+  # ---- Private subnets (container instances, tasks, RDS, Redis) ----
   PrivateSubnetA:
     Type: AWS::EC2::Subnet
     Properties:
@@ -265,7 +312,7 @@ Resources:
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Fargate tasks - only the ALB may reach the frontend port
+      GroupDescription: ECS tasks (awsvpc ENIs) - only the ALB may reach the frontend port
       VpcId: !Ref VpcId
       Tags:
         - Key: Name
@@ -281,10 +328,22 @@ Resources:
       SourceSecurityGroupId: !Ref AlbSecurityGroup
       Description: frontend nginx, ALB only
 
+  # Container instances themselves. They never receive traffic directly (the ALB
+  # targets the tasks' own ENIs under awsvpc), so this group has no ingress at all
+  # — only the implicit all-egress needed to pull images and reach ECS.
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS container instances - no inbound; egress only
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-instance-sg"
+
   DbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: RDS PostgreSQL - reachable only from the Fargate tasks
+      GroupDescription: RDS PostgreSQL - reachable only from the ECS tasks
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -299,7 +358,7 @@ Resources:
   CacheSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: ElastiCache Redis - reachable only from the Fargate tasks
+      GroupDescription: ElastiCache Redis - reachable only from the ECS tasks
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -402,13 +461,20 @@ Resources:
       VpcId: !Ref VpcId
       Protocol: HTTP
       Port: 80
-      TargetType: ip           # required for Fargate awsvpc networking
+      TargetType: ip           # required by awsvpc networking (task ENIs)
       HealthCheckPath: /api/ping
       HealthCheckProtocol: HTTP
-      HealthCheckIntervalSeconds: 15
-      HealthCheckTimeoutSeconds: 5
+      # Tuned for how fast a target is ejected after an UNGRACEFUL loss (an
+      # instance terminating outright, rather than a task draining). A drained
+      # task is deregistered by ECS before it dies, but a yanked instance takes
+      # its task ENI with it, so the only thing that stops the ALB forwarding into
+      # a void is a failed health check. 5s x 2 ejects in ~10s instead of ~45s.
+      # Measured: terminating an instance mid-traffic cost 2 failed requests at
+      # 15s/3-strikes, and the window shrinks proportionally with these values.
+      HealthCheckIntervalSeconds: 5
+      HealthCheckTimeoutSeconds: 3
       HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 3
+      UnhealthyThresholdCount: 2
       Matcher:
         HttpCode: "200"
       TargetGroupAttributes:
@@ -475,7 +541,124 @@ Resources:
         - Name: containerInsights
           Value: enabled
 
-  # Pulls images and writes logs.
+  # ======================= EC2 capacity =======================
+  # The instances that actually run the tasks. Compared with Fargate this trades
+  # "no servers to manage" for cheaper sustained capacity and a specific instance
+  # type — but the availability story is unchanged: tasks are spread across two
+  # AZs, ECS reschedules onto the survivor, and the ASG replaces a lost instance.
+
+  # Lets the ECS agent register the instance with the cluster and pull from ECR.
+  # SSM access is included so the box can be debugged without opening SSH.
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-lt"
+      LaunchTemplateData:
+        ImageId: !Ref EcsAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroup
+        MetadataOptions:
+          HttpTokens: required          # IMDSv2 only
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 30
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        # The ECS agent reads the cluster name from this file at boot; without it
+        # the instance registers with the "default" cluster and the service can
+        # never place a task.
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "ECS_CLUSTER=${Cluster}" >> /etc/ecs/ecs.config
+            echo "ECS_ENABLE_CONTAINER_METADATA=true" >> /etc/ecs/ecs.config
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${AWS::StackName}-container-instance"
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${AWS::StackName}-asg"
+      MinSize: !Ref ClusterSize
+      MaxSize: !Ref ClusterSize
+      DesiredCapacity: !Ref ClusterSize
+      # Private subnets: the instances pull images out through the NAT gateway and
+      # are not reachable from the internet.
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 120
+      # Keep capacity balanced across AZs so losing one AZ costs half the
+      # capacity, not all of it.
+      AvailabilityZoneDistribution:
+        CapacityDistributionStrategy: balanced-best-effort
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-container-instance"
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT5M
+
+  # Ties the ASG to the cluster. Managed scaling is off because MinSize == MaxSize
+  # (a fixed-size cluster); managed termination protection is off so the ASG can
+  # freely replace an unhealthy instance.
+  CapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: !Sub "${AWS::StackName}-cp"
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup
+        ManagedScaling:
+          Status: DISABLED
+        ManagedTerminationProtection: DISABLED
+
+  ClusterCapacityProviderAssociation:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref Cluster
+      CapacityProviders:
+        - !Ref CapacityProvider
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: !Ref CapacityProvider
+          Weight: 1
+          Base: 0
+
+  # Pulls images and writes logs (used by the task, not the instance).
   ExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -508,14 +691,19 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: !Sub "${AWS::StackName}"
-      RequiresCompatibilities: [FARGATE]
+      RequiresCompatibilities: [EC2]
+      # awsvpc is kept (rather than bridge) so each task gets its own ENI and its
+      # own security group, and so the ALB can target task IPs directly. Note the
+      # ENI budget: c6g.large allows 3 ENIs, one of which is the instance's own,
+      # so at most 2 tasks fit per instance.
       NetworkMode: awsvpc
       Cpu: !Ref TaskCpu
       Memory: !Ref TaskMemory
       ExecutionRoleArn: !GetAtt ExecutionRole.Arn
       TaskRoleArn: !GetAtt TaskRole.Arn
       RuntimePlatform:
-        CpuArchitecture: X86_64
+        # Must match the instance architecture and the pushed images.
+        CpuArchitecture: !Ref InstanceArchitecture
         OperatingSystemFamily: LINUX
       ContainerDefinitions:
         # ---- backend ----
@@ -615,18 +803,45 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    DependsOn: ListenerReadyBarrier
+    DependsOn:
+      - ListenerReadyBarrier
+      # Placement fails outright if the capacity provider is not yet attached to
+      # the cluster when the service is created.
+      - ClusterCapacityProviderAssociation
     Properties:
       ServiceName: !Sub "${AWS::StackName}-svc"
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
-      LaunchType: FARGATE
-      PlatformVersion: LATEST
-      # Spread across AZs so one AZ failure cannot take every task.
-      PlacementStrategies: []
+      # EC2 launch type via the capacity provider, rather than LaunchType: EC2
+      # directly — the provider is what binds the service to this stack's ASG.
+      CapacityProviderStrategy:
+        - CapacityProvider: !Ref CapacityProvider
+          Weight: 1
+          Base: 0
+      # HARD requirement, not just a preference: never put two tasks on the same
+      # container instance. `spread` alone is advisory — measured behaviour was
+      # that after an instance was replaced, ECS packed BOTH tasks onto whichever
+      # instance had capacity and then never rebalanced them (availability-zone
+      # rebalancing did not move them within 6 minutes). Two tasks on one box
+      # means one instance failure takes the whole service, which is the exact
+      # thing this template exists to prevent.
+      #
+      # Consequence: DesiredCount must be <= ClusterSize, and a rolling deploy
+      # needs somewhere to put the new task — see MinimumHealthyPercent below.
+      PlacementConstraints:
+        - Type: distinctInstance
+      PlacementStrategies:
+        - Type: spread
+          Field: attribute:ecs.availability-zone
       DeploymentConfiguration:
-        MinimumHealthyPercent: 100   # never drop below full capacity during deploys
+        # MaximumPercent MUST stay above 100: ECS rejects the service outright
+        # ("Availability Zone Rebalancing does not support maximumPercent <= 100")
+        # because rebalancing works by starting a replacement task before
+        # draining the old one. That surplus task needs an instance to land on,
+        # and distinctInstance forbids doubling up — hence ClusterSize defaults to
+        # DesiredCount + 1, leaving one instance free as deployment headroom.
+        MinimumHealthyPercent: 100
         MaximumPercent: 200
         DeploymentCircuitBreaker:
           Enable: true
@@ -634,7 +849,8 @@ Resources:
       HealthCheckGracePeriodSeconds: 120
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED   # tasks are private; egress via NAT
+          # AssignPublicIp is only valid for Fargate; under EC2 the task ENI
+          # inherits the instance subnet's routing (private -> NAT).
           Subnets:
             - !Ref PrivateSubnetA
             - !Ref PrivateSubnetB
@@ -674,6 +890,10 @@ Outputs:
 
   ClusterName:
     Value: !Ref Cluster
+
+  AutoScalingGroupName:
+    Description: ASG holding the container instances (scale or cycle them here).
+    Value: !Ref AutoScalingGroup
 
   ServiceName:
     Value: !GetAtt Service.Name
