@@ -33,11 +33,6 @@ import { listChannels } from '../api/channels';
 
 const { Title, Text } = Typography;
 
-// DB column for rule.target_model is varchar(128) (Tech Design §3). The service
-// layer does not length-check, and on Postgres an over-long value surfaces as a
-// 500, so the input caps length here.
-const TARGET_MODEL_MAX = 128;
-
 // Clickable routing-expression examples shown under the expr field. The `expr`
 // is the literal (language-neutral) expression inserted on click; `key` maps to
 // a localized one-line description in rules.json (form.exprEx.<key>).
@@ -221,46 +216,57 @@ export default function RoutingRules() {
   // Values currently in the open dialog (falls back to what it was opened with).
   const formValues = liveValues || initValues;
 
-  // Models the selected target channels can serve. This deliberately mirrors the
-  // backend's candidateChannels() + channelServes() exactly, because a mismatch
-  // here produces the worst kind of hint: silence about a rule that can never be
-  // served. Three rules must match:
-  //   - only ENABLED channels are candidates (the engine queries status=enabled),
-  //   - explicit target_channel_ids take PRECEDENCE and ignore target_group
-  //     entirely (the engine's if/else-if, not a union),
-  //   - a channel serves its models list PLUS its model_mapping keys (a mapping
-  //     key is an external name it answers to).
+  // Models available to pick as the rule's target model. Model routing is scoped
+  // to the chosen channels, so this is the INTERSECTION of what every selected
+  // channel can serve — picking something only some of them offer would leave the
+  // others unable to run it, and the engine no longer filters them out (channel
+  // routing takes precedence), so the request would fail at the upstream instead.
+  //
+  // Mirrors the backend's channelServes(): a channel serves its models list PLUS
+  // its model_mapping keys (a mapping key is an external name it answers to).
+  // Only ENABLED channels count, matching candidateChannels().
   const targetChannelModels = useMemo(() => {
     const enabled = channels.filter((c) => c.status === 'enabled');
     const ids = formValues.target_channel_ids || [];
     const group = (formValues.target_group || '').trim();
-    let picked;
+    // Explicit ids take precedence over the group, exactly as the engine does.
+    let picked = [];
     if (ids.length) {
       picked = enabled.filter((c) => ids.includes(c.id));
     } else if (group) {
       picked = enabled.filter((c) => c.group === group);
-    } else {
-      // Neither set: the rule targets every enabled channel.
-      picked = enabled;
     }
-    const set = new Set();
-    picked.forEach((c) => {
-      (c.models || []).forEach((m) => set.add(m));
+
+    const served = (c) => {
+      const set = new Set(c.models || []);
       Object.keys(c.model_mapping || {}).forEach((m) => set.add(m));
-    });
-    return { count: picked.length, models: Array.from(set).sort() };
+      return set;
+    };
+    let models = [];
+    if (picked.length) {
+      const sets = picked.map(served);
+      models = Array.from(sets[0]).filter((m) => sets.every((set) => set.has(m))).sort();
+    }
+    return { count: picked.length, models };
   }, [channels, formValues.target_channel_ids, formValues.target_group]);
 
   const targetModelValue = String(formValues.target_model ?? '').trim();
 
-  // Soft warning only: the model may legitimately not be listed yet (channels
-  // can be created after the rule), so saving stays allowed. Only warn once at
-  // least one target channel is actually resolved — otherwise there is nothing
-  // to compare against.
-  const targetModelUnknown =
+  // A saved value can fall outside the current intersection later (a channel was
+  // edited, or the rule's targets changed). Keep offering it so opening the
+  // dialog never silently drops an existing override, but flag it.
+  const targetModelStale =
     targetModelValue !== '' &&
     targetChannelModels.count > 0 &&
     !targetChannelModels.models.includes(targetModelValue);
+
+  const targetModelOptions = useMemo(() => {
+    const opts = targetChannelModels.models.map((m) => ({ label: m, value: m }));
+    if (targetModelStale) {
+      opts.unshift({ label: targetModelValue, value: targetModelValue });
+    }
+    return opts;
+  }, [targetChannelModels.models, targetModelStale, targetModelValue]);
 
   const buildPayload = useCallback((values) => {
     const match = {};
@@ -635,53 +641,43 @@ export default function RoutingRules() {
             label={t('form.targetGroup')}
             placeholder={t('form.targetGroupPlaceholder')}
           />
-          {/* Optional model override (Tech Design §2): empty = keep the client's
-              requested model, i.e. today's behaviour. Free text on purpose (the
-              channel may be created later), so the selected channels' models are
-              offered as click-to-fill chips below rather than a closed list.
-              A plain Input (not AutoComplete) because AutoComplete builds its
-              inner Input props explicitly and drops maxLength, and maxLength is
-              what keeps the UI from producing a value the varchar(128) column
-              rejects on Postgres (a 500).
-              Deliberately NO field-level initValue here — it would shadow the
+          {/* Model routing is SCOPED to the chosen channels: pick the target from
+              what those channels actually serve, rather than typing a free-form
+              name. Channel routing takes precedence in the engine, so a rule's
+              channels are no longer filtered by model name — a typo here would
+              therefore not be caught at routing time, it would fail at the
+              upstream. A closed list removes that class of misconfiguration.
+              Deliberately NO field-level initValue — it would shadow the
               form-level initValues and break edit round-tripping (ab127e1). */}
-          <Form.Input
+          <Form.Select
             field="target_model"
             label={t('form.targetModel')}
-            placeholder={t('form.targetModelPlaceholder')}
-            maxLength={TARGET_MODEL_MAX}
+            placeholder={
+              targetChannelModels.count
+                ? t('form.targetModelPlaceholder')
+                : t('form.targetModelPickChannelFirst')
+            }
+            // Without a resolved channel there is nothing to choose from, and
+            // with several channels the intersection can legitimately be empty.
+            disabled={!targetChannelModels.count || !targetModelOptions.length}
+            optionList={targetModelOptions}
+            filter
             showClear
-            style={{ fontFamily: 'var(--semi-font-family-mono, monospace)' }}
+            style={{ width: '100%', fontFamily: 'var(--semi-font-family-mono, monospace)' }}
           />
           <Text
-            type={targetModelUnknown ? 'warning' : 'tertiary'}
+            type={targetModelStale ? 'warning' : 'tertiary'}
             size="small"
             style={{ display: 'block', marginTop: -8, marginBottom: 6, whiteSpace: 'pre-line' }}
           >
-            {targetModelUnknown
+            {targetModelStale
               ? t('form.targetModelNotServed', { value: targetModelValue })
-              : t('form.targetModelHelp')}
+              : !targetChannelModels.count
+                ? t('form.targetModelPickChannelFirst')
+                : !targetModelOptions.length
+                  ? t('form.targetModelNoCommon')
+                  : t('form.targetModelHelp')}
           </Text>
-          {targetChannelModels.models.length ? (
-            <div style={{ marginBottom: 4 }}>
-              <Text type="tertiary" size="small" style={{ display: 'block', marginBottom: 4 }}>
-                {t('form.targetModelSuggestTitle')}
-              </Text>
-              <Space spacing={6} wrap>
-                {targetChannelModels.models.map((m) => (
-                  <Tag
-                    key={m}
-                    color="green"
-                    type="light"
-                    style={{ fontFamily: 'var(--semi-font-family-mono, monospace)', cursor: 'pointer' }}
-                    onClick={() => formApi && formApi.setValue('target_model', m)}
-                  >
-                    {m}
-                  </Tag>
-                ))}
-              </Space>
-            </div>
-          ) : null}
         </Form>
       </Modal>
     </div>

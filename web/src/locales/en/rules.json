@@ -33,9 +33,9 @@
     "targetGroup": "Or target group (optional alternative to channels)",
     "targetGroupPlaceholder": "channel group label",
     "targetModel": "Target model (optional override)",
-    "targetModelPlaceholder": "leave empty to keep the requested model",
-    "targetModelHelp": "Optional. When set, matched requests are served by this model instead of the one the client asked for — that is how one channel can serve several difficulty tiers (e.g. opus for hard requests, haiku for easy ones).\nThe target channel's model mapping still applies on top of it, so use the external model name here, not the upstream id.",
-    "targetModelNotServed": "None of the selected target channels lists \"{{value}}\" in its models. You can still save (the channel may be configured later), but until one serves it, matched requests will fail with no-candidate-channel.",
+    "targetModelPlaceholder": "Empty = keep the model the client requested",
+    "targetModelHelp": "Empty = keep the model the client requested (the channel's model_mapping still applies). Once set, every request this rule matches uses this model regardless of what the client asked for.",
+    "targetModelNotServed": "The saved \"{{value}}\" is not among the models common to the selected channels (their configuration may have changed). You can keep it, but verify those channels can actually serve it.",
     "targetModelSuggestTitle": "Models served by the selected channels (click to use):",
     "exprExamplesTitle": "Examples (click to use):",
     "exprEx": {
@@ -46,7 +46,9 @@
       "bigPrompt": "large input context",
       "modelAndWrite": "a specific model doing a tool call",
       "midTier": "difficulty tiering — mid tier: a tool call or a medium-length output (pair with a target model such as sonnet, and let a lower-priority catch-all rule route the rest to a cheaper one)"
-    }
+    },
+    "targetModelPickChannelFirst": "Pick the target channels first, then choose the model",
+    "targetModelNoCommon": "The selected channels have no model in common — change the channels, or select fewer of them"
   },
   "match": {
     "any": "any (no constraints)",

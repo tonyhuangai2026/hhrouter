@@ -373,13 +373,17 @@ func (e *Engine) SelectChannelCtx(ctx context.Context, in RouteInput) (*Selectio
 		// so operators can tell a misconfigured override apart from a plain
 		// "nobody serves the requested model", and wrap the sentinel so
 		// errors.Is(err, ErrNoCandidate) keeps working for existing callers.
-		// The override is what makes the diagnostic useful, so key off "the rule
-		// pinned a target_model" rather than "the name differs from the request":
-		// pinning the same name the client asked for is legitimate tier config, and
-		// such a rule must still be named when nothing can serve it.
-		if matched != nil && strings.TrimSpace(matched.TargetModel) != "" {
-			return nil, fmt.Errorf("%w: rule %s target_model %q is not served by any candidate channel (request asked for %q)",
-				ErrNoCandidate, ruleIdent(matched), effectiveModel, in.Model)
+		// Name the rule whenever one matched: with channel routing taking
+		// precedence, an empty candidate set under a rule means its target
+		// channels are all gone/disabled (the model name no longer filters them),
+		// and the operator needs to know WHICH rule pointed nowhere.
+		if matched != nil {
+			if target := strings.TrimSpace(matched.TargetModel); target != "" {
+				return nil, fmt.Errorf("%w: rule %s has no enabled target channel (target_model %q, request asked for %q)",
+					ErrNoCandidate, ruleIdent(matched), target, in.Model)
+			}
+			return nil, fmt.Errorf("%w: rule %s has no enabled target channel able to serve %q",
+				ErrNoCandidate, ruleIdent(matched), in.Model)
 		}
 		return nil, ErrNoCandidate
 	}
@@ -485,14 +489,22 @@ func ruleMatches(spec model.MatchSpec, group, requestedModel string, estTokens i
 }
 
 // candidateChannels resolves the candidate enabled channels for a matched rule.
-// When rule is nil (no match) it falls back to every enabled channel that can
-// serve the model. In all cases a candidate must be enabled and have the model in
-// its model list (after model_mapping resolution).
 //
-// effectiveModel is the model the channel must serve — the rule's target_model
-// when it overrides one, otherwise the client's requested model (see
-// SelectChannelCtx). Filtering on the effective model is what lets a single
-// channel back several difficulty tiers instead of needing one channel per model.
+// Channel routing takes precedence over model routing: when the rule names its
+// targets explicitly (target_channel_ids or target_group) those targets ARE the
+// decision, and the model name is not used to filter them further. Inside a
+// chosen channel the model is then settled separately by target_model (see
+// SelectChannelCtx) — so a rule may legitimately send a request for "opus" to a
+// channel that only lists cheaper models, which is the whole point of tiering
+// within one channel.
+//
+// The model-name filter still applies when the rule does NOT name targets, and
+// on the no-rule fallback path. There the requested model is the only signal
+// available, and without it the request could land on a channel that cannot
+// serve it at all.
+//
+// effectiveModel is the rule's target_model when it overrides one, otherwise the
+// client's requested model.
 func (e *Engine) candidateChannels(rule *model.RoutingRule, effectiveModel string) ([]model.Channel, error) {
 	var channels []model.Channel
 	if err := e.db.Where("status = ?", model.ChannelEnabled).Find(&channels).Error; err != nil {
@@ -513,6 +525,12 @@ func (e *Engine) candidateChannels(rule *model.RoutingRule, effectiveModel strin
 		allowGroup = strings.TrimSpace(rule.TargetGroup)
 	}
 
+	// Did the rule actually pin its targets? If so the model name must not narrow
+	// them any further — that second gate is what used to drop a rule's own
+	// channel merely because the channel had not declared whatever name the
+	// client happened to send.
+	targetsPinned := allowIDs != nil || allowGroup != ""
+
 	out := make([]model.Channel, 0, len(channels))
 	for i := range channels {
 		ch := channels[i]
@@ -528,7 +546,7 @@ func (e *Engine) candidateChannels(rule *model.RoutingRule, effectiveModel strin
 				continue
 			}
 		}
-		if !channelServes(&ch, effectiveModel) {
+		if !targetsPinned && !channelServes(&ch, effectiveModel) {
 			continue
 		}
 		out = append(out, ch)

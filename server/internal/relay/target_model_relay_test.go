@@ -579,15 +579,21 @@ func TestTargetModel_NoCandidateStreamSurfacesRuleAndTargetModel(t *testing.T) {
 // exact string today, so the BLOCKER fix must not alter it — the rule/target
 // detail is only appended when the engine actually has an override to report.
 func TestNoOverride_NoCandidateMessageUnchanged(t *testing.T) {
-	const wantMsg = `no upstream channel can serve model "gpt-4o"`
+	const legacyMsg = `no upstream channel can serve model "gpt-4o"`
 
 	for _, tc := range []struct {
 		name   string
 		mkRule bool
 		stream bool
+		// wantExact is the whole message when no rule matched. When a rule DID
+		// match, the message must still start with the legacy text but also name
+		// the rule — channel routing now takes precedence over the model name, so
+		// "a rule matched yet nothing could serve it" is a rule-configuration
+		// problem and the operator has to be told which rule.
+		wantRuleNamed bool
 	}{
 		{name: "no_rule_at_all"},
-		{name: "matching_rule_without_target_model", mkRule: true},
+		{name: "matching_rule_without_target_model", mkRule: true, wantRuleNamed: true},
 		{name: "stream_no_rule", stream: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -613,15 +619,11 @@ func TestNoOverride_NoCandidateMessageUnchanged(t *testing.T) {
 				if w.Code != http.StatusBadGateway {
 					t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
 				}
-				if got := tmErrMessage(t, w.Body.String()); got != wantMsg {
-					t.Errorf("error response body message = %q, want the unchanged legacy text %q", got, wantMsg)
-				}
+				assertNoCandidateMsg(t, "error response body message", tmErrMessage(t, w.Body.String()), legacyMsg, tc.wantRuleNamed)
 			}
 
 			log := tmOneLog(t, gdb)
-			if log.ErrorMessage != wantMsg {
-				t.Errorf("request_logs.error_message = %q, want the unchanged legacy text %q", log.ErrorMessage, wantMsg)
-			}
+			assertNoCandidateMsg(t, "request_logs.error_message", log.ErrorMessage, legacyMsg, tc.wantRuleNamed)
 			if log.HTTPStatus != http.StatusBadGateway {
 				t.Errorf("log HTTPStatus = %d, want 502", log.HTTPStatus)
 			}
@@ -669,5 +671,24 @@ func TestNoCandidateDetail(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, `rule "opus-tier" (id 3)`) || !strings.Contains(got, "claude-opus-4-8") {
 		t.Errorf("detail = %q, want the rule identifier + target_model diagnostic", got)
+	}
+}
+
+// assertNoCandidateMsg checks a no-candidate message. Without a matched rule the
+// legacy wording must be preserved byte-for-byte (existing triage relies on it);
+// with one, the same prefix must be there PLUS the rule's identity.
+func assertNoCandidateMsg(t *testing.T, what, got, legacy string, wantRuleNamed bool) {
+	t.Helper()
+	if !wantRuleNamed {
+		if got != legacy {
+			t.Errorf("%s = %q, want the unchanged legacy text %q", what, got, legacy)
+		}
+		return
+	}
+	if !strings.HasPrefix(got, legacy) {
+		t.Errorf("%s = %q, want it to still start with %q", what, got, legacy)
+	}
+	if !strings.Contains(got, "plain-rule") {
+		t.Errorf("%s = %q, want it to name the matched rule so the operator knows which rule pointed nowhere", what, got)
 	}
 }

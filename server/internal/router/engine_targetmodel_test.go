@@ -60,10 +60,13 @@ func TestTargetModelEmpty_LegacyBehaviour(t *testing.T) {
 				t.Fatalf("UpstreamModel = %q, want gpt-4o-upstream", up)
 			}
 
-			// A model nothing serves still yields the bare sentinel (unchanged text).
+			// A model nothing serves is still ErrNoCandidate. The text now names the
+			// matched rule (an operator seeing "nothing serves this" needs to know
+			// which rule pointed nowhere), so assert the wrapped sentinel rather
+			// than exact identity.
 			_, err = eng.SelectChannel("default", "nonexistent-model", 10)
-			if err != ErrNoCandidate { //nolint:errorlint // exact-identity check is the point
-				t.Fatalf("expected bare ErrNoCandidate, got %v", err)
+			if !errors.Is(err, ErrNoCandidate) {
+				t.Fatalf("expected ErrNoCandidate, got %v", err)
 			}
 		})
 	}
@@ -236,5 +239,128 @@ func TestTargetModelNoCandidateError_SameNameAsRequest(t *testing.T) {
 				t.Fatalf("error text %q must include the target_model value", msg)
 			}
 		})
+	}
+}
+
+// TestPinnedTargetsSkipModelFilter is the core of "channel routing takes
+// precedence over model routing": once a rule names its target channels, the
+// requested model name must NOT narrow that set further. Before this, a rule
+// pointing at a channel was silently dropped whenever the channel had not also
+// declared whatever model name the client happened to send — which made
+// tiering inside one channel impossible to configure.
+func TestPinnedTargetsSkipModelFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		targetModel string
+		wantEff     string
+	}{
+		// The rule settles the model itself...
+		{"with target_model", "tier-haiku", "tier-haiku"},
+		// ...and even with no override the pinned channel is still honoured; the
+		// model then stays the requested one and is resolved per channel.
+		{"without target_model", "", "claude-opus-4-8"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newEngineTestDB(t)
+			// Deliberately does NOT list claude-opus-4-8: the client asks for opus,
+			// the channel only offers cheaper tiers.
+			pinned := mustCreateChannel(t, db, model.Channel{
+				Name: "tiered", Models: jsonB(t, []string{"tier-haiku", "tier-sonnet"}),
+			})
+			// A channel that DOES serve the requested model, to prove the pin wins
+			// rather than the model-name match.
+			mustCreateChannel(t, db, model.Channel{
+				Name: "opus-only", Models: jsonB(t, []string{"claude-opus-4-8"}),
+			})
+
+			mustCreateRule(t, db, model.RoutingRule{
+				Name: "pin-tiered", Enabled: true, Priority: 1,
+				TargetChannelIDs: jsonB(t, []uint{pinned.ID}),
+				TargetModel:      tc.targetModel,
+			})
+
+			sel, err := NewEngine(db).SelectChannel("default", "claude-opus-4-8", 10)
+			if err != nil {
+				t.Fatalf("SelectChannel: %v", err)
+			}
+			cands := sel.Candidates()
+			if len(cands) != 1 || cands[0].ID != pinned.ID {
+				t.Fatalf("candidates = %+v, want only the pinned channel (id %d)", cands, pinned.ID)
+			}
+			if got := sel.EffectiveModel(); got != tc.wantEff {
+				t.Fatalf("EffectiveModel() = %q, want %q", got, tc.wantEff)
+			}
+			// The requested name is preserved for logging/observability either way.
+			if sel.Model != "claude-opus-4-8" {
+				t.Fatalf("Selection.Model = %q, want the requested claude-opus-4-8", sel.Model)
+			}
+		})
+	}
+}
+
+// TestTargetGroupSkipsModelFilter covers the same precedence for a rule that
+// pins a channel GROUP rather than explicit ids.
+func TestTargetGroupSkipsModelFilter(t *testing.T) {
+	db := newEngineTestDB(t)
+	inGroup := mustCreateChannel(t, db, model.Channel{
+		Name: "grp-a", Group: "cheap", Models: jsonB(t, []string{"tier-haiku"}),
+	})
+	// Same model, different group: must stay out.
+	mustCreateChannel(t, db, model.Channel{
+		Name: "grp-b", Group: "other", Models: jsonB(t, []string{"tier-haiku"}),
+	})
+
+	mustCreateRule(t, db, model.RoutingRule{
+		Name: "pin-group", Enabled: true, Priority: 1,
+		TargetGroup: "cheap", TargetModel: "tier-haiku",
+	})
+
+	sel, err := NewEngine(db).SelectChannel("default", "claude-opus-4-8", 10)
+	if err != nil {
+		t.Fatalf("SelectChannel: %v", err)
+	}
+	cands := sel.Candidates()
+	if len(cands) != 1 || cands[0].ID != inGroup.ID {
+		t.Fatalf("candidates = %+v, want only the in-group channel (id %d)", cands, inGroup.ID)
+	}
+}
+
+// TestUnpinnedRuleStillFiltersByModel guards the other half of the contract: a
+// rule that names NO targets keeps filtering by model name, and so does the
+// no-rule fallback. Without that, a request could be handed to a channel with no
+// idea how to serve it.
+func TestUnpinnedRuleStillFiltersByModel(t *testing.T) {
+	db := newEngineTestDB(t)
+	serves := mustCreateChannel(t, db, model.Channel{
+		Name: "serves", Models: jsonB(t, []string{"claude-opus-4-8"}),
+	})
+	mustCreateChannel(t, db, model.Channel{
+		Name: "unrelated", Models: jsonB(t, []string{"tier-haiku"}),
+	})
+
+	// Rule matches the request but pins nothing.
+	mustCreateRule(t, db, model.RoutingRule{Name: "unpinned", Enabled: true, Priority: 1})
+
+	sel, err := NewEngine(db).SelectChannel("default", "claude-opus-4-8", 10)
+	if err != nil {
+		t.Fatalf("SelectChannel: %v", err)
+	}
+	if cands := sel.Candidates(); len(cands) != 1 || cands[0].ID != serves.ID {
+		t.Fatalf("candidates = %+v, want only the channel serving the model (id %d)", cands, serves.ID)
+	}
+
+	// Channel-fallback path (no rule at all) behaves the same way.
+	db2 := newEngineTestDB(t)
+	s2 := mustCreateChannel(t, db2, model.Channel{Name: "serves", Models: jsonB(t, []string{"claude-opus-4-8"})})
+	mustCreateChannel(t, db2, model.Channel{Name: "unrelated", Models: jsonB(t, []string{"tier-haiku"})})
+	sel2, err := NewEngine(db2).SelectChannel("default", "claude-opus-4-8", 10)
+	if err != nil {
+		t.Fatalf("fallback SelectChannel: %v", err)
+	}
+	if sel2.Rule != nil {
+		t.Fatalf("expected the no-rule fallback, matched %v", ruleName(sel2.Rule))
+	}
+	if cands := sel2.Candidates(); len(cands) != 1 || cands[0].ID != s2.ID {
+		t.Fatalf("fallback candidates = %+v, want only id %d", cands, s2.ID)
 	}
 }
