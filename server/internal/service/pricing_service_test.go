@@ -100,37 +100,45 @@ func TestPricingCost(t *testing.T) {
 	}
 }
 
-// TestPricingLookup covers the ErrPriceNotConfigured sentinel for a missing row
-// and for rows missing input/output, plus a happy-path lookup.
+// TestPricingLookup covers the unpriced-is-free contract: a missing row, and a
+// row whose input/output price is unusable, both yield (nil, nil) so the relay
+// serves the model for free instead of rejecting it. A valid row is returned.
 func TestPricingLookup(t *testing.T) {
 	gdb := newPricingDB(t)
 	svc := NewPricingService(gdb)
 
-	// (a) no row → ErrPriceNotConfigured.
-	if _, err := svc.Lookup(1, "gpt-4o"); err != ErrPriceNotConfigured {
-		t.Errorf("missing row: err = %v, want ErrPriceNotConfigured", err)
+	// (a) no row → free, not an error.
+	p, err := svc.Lookup(1, "gpt-4o")
+	if err != nil || p != nil {
+		t.Errorf("missing row: (%v, %v), want (nil, nil) so the model is served free", p, err)
 	}
 
-	// (b) row with input=0 → ErrPriceNotConfigured.
+	// (b) row with input=0 → as unusable as no row at all.
 	gdb.Create(&model.ModelPrice{ChannelID: 1, Model: "no-input", InputMicroUSDPerM: 0, OutputMicroUSDPerM: 15_000_000})
-	if _, err := svc.Lookup(1, "no-input"); err != ErrPriceNotConfigured {
-		t.Errorf("input=0: err = %v, want ErrPriceNotConfigured", err)
+	if p, err := svc.Lookup(1, "no-input"); err != nil || p != nil {
+		t.Errorf("input=0: (%v, %v), want (nil, nil)", p, err)
 	}
 
-	// (c) row with output=0 → ErrPriceNotConfigured.
+	// (c) row with output=0 → same.
 	gdb.Create(&model.ModelPrice{ChannelID: 1, Model: "no-output", InputMicroUSDPerM: 3_000_000, OutputMicroUSDPerM: 0})
-	if _, err := svc.Lookup(1, "no-output"); err != ErrPriceNotConfigured {
-		t.Errorf("output=0: err = %v, want ErrPriceNotConfigured", err)
+	if p, err := svc.Lookup(1, "no-output"); err != nil || p != nil {
+		t.Errorf("output=0: (%v, %v), want (nil, nil)", p, err)
 	}
 
 	// (d) valid row → returned.
 	gdb.Create(&model.ModelPrice{ChannelID: 1, Model: "gpt-4o", InputMicroUSDPerM: 3_000_000, OutputMicroUSDPerM: 15_000_000})
-	p, err := svc.Lookup(1, "gpt-4o")
+	p, err = svc.Lookup(1, "gpt-4o")
 	if err != nil {
 		t.Fatalf("valid lookup: %v", err)
 	}
-	if p.InputMicroUSDPerM != 3_000_000 || p.OutputMicroUSDPerM != 15_000_000 {
+	if p == nil || p.InputMicroUSDPerM != 3_000_000 || p.OutputMicroUSDPerM != 15_000_000 {
 		t.Errorf("lookup row = %+v", p)
+	}
+
+	// (e) the consequence, asserted so it cannot regress unnoticed: an unpriced
+	// model costs nothing, so it debits no quota and is effectively unmetered.
+	if got := svc.Cost(nil, adapter.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000}); got != 0 {
+		t.Errorf("Cost(nil, heavy usage) = %d, want 0 (unpriced = free)", got)
 	}
 }
 

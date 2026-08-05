@@ -168,10 +168,9 @@ func (r *Relayer) handle(c *gin.Context, format InboundFormat, uni adapter.Unifi
 // gateModelPrice enforces USD billing admission for a chosen candidate channel
 // BEFORE any upstream call (Tech Design §4.1):
 //
-//  1. Look up the (channel, upstreamModel) price. A missing/incomplete price
-//     (ErrPriceNotConfigured) is an operator-configuration problem, NOT an
-//     upstream fault: it returns a non-nil rejecter that writes a 400 +
-//     error-logs, and the caller must STOP (no failover to other channels).
+//  1. Look up the (channel, upstreamModel) price. A model with no usable price is
+//     served as FREE (nil price, cost 0) rather than rejected — see
+//     PricingService.Lookup for why, and for the quota caveat that follows.
 //  2. USD pre-flight: estimate the cost of the prompt at the model's input price
 //     and reject with 402 when it exceeds the remaining USD balance.
 //
@@ -179,16 +178,12 @@ func (r *Relayer) handle(c *gin.Context, format InboundFormat, uni adapter.Unifi
 // failure it returns reject != nil — the caller invokes it (it writes the client
 // error + the error request_log) and returns without trying another candidate.
 func (r *Relayer) gateModelPrice(c *gin.Context, rc *requestContext, att attempt, rule *model.RoutingRule, estPrompt int, stream bool, start time.Time) (price *model.ModelPrice, reject func()) {
+	// A nil price means the model is unpriced, which is served as free rather than
+	// rejected (see PricingService.Lookup). Cost(nil, …) is 0, so the pre-flight
+	// below passes and the request debits nothing.
 	price, err := r.pricing.Lookup(att.channel.ID, att.upstream)
 	if err != nil {
-		if errors.Is(err, service.ErrPriceNotConfigured) {
-			msg := "model \"" + att.upstream + "\" has no price configured on channel \"" + att.channel.Name + "\"; an administrator must configure its price before it can be requested"
-			return nil, func() {
-				WriteOutError(c, rc.outFormat, http.StatusBadRequest, ClassInvalidRequest, msg)
-				r.finish(rc, att, rule, model.LogError, http.StatusBadRequest, msg, estPrompt, 0, estPrompt, stream, time.Since(start), nil, nil)
-			}
-		}
-		// Unexpected lookup error: surface as internal, no failover.
+		// Only a genuine lookup failure reaches here: surface as internal, no failover.
 		return nil, func() {
 			WriteOutError(c, rc.outFormat, http.StatusInternalServerError, ClassInternal, "could not look up model price")
 			r.finish(rc, att, rule, model.LogError, http.StatusInternalServerError, "price lookup: "+err.Error(), estPrompt, 0, estPrompt, stream, time.Since(start), nil, nil)

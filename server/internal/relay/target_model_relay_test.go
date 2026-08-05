@@ -447,29 +447,24 @@ func TestTargetModel_CacheThresholdFollowsOverride(t *testing.T) {
 	}
 }
 
-// TestTargetModel_MissingPriceOnOverrideRejects400 covers the missing-price
-// semantics under an override: the price is looked up for (channel, OVERRIDDEN
-// model), and when that row is absent the request is rejected 400 WITHOUT trying
-// another candidate — identical to the existing missing-price behaviour, just
-// keyed on the effective model. Here the REQUESTED model has a price and the
-// override does not, so a 200 would prove the wrong key was used.
-func TestTargetModel_MissingPriceOnOverrideRejects400(t *testing.T) {
+// TestTargetModel_UnpricedOverrideIsServedFree covers the missing-price semantics
+// under an override. The price is looked up for (channel, OVERRIDDEN model), and
+// an unpriced model is now served for FREE rather than rejected — so the proof
+// that the right key was used moves from "rejected with 400" to "served at cost
+// 0". Here the REQUESTED model IS priced and the override is not: a non-zero cost
+// would mean the lookup used the requested name.
+func TestTargetModel_UnpricedOverrideIsServedFree(t *testing.T) {
 	gdb := newTargetModelDB(t)
 
-	var upstreamCalls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&upstreamCalls, 1)
-		fmt.Fprint(w, `{"model":"x","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+		fmt.Fprint(w, `{"model":"x","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":1000,"total_tokens":2000}}`)
 	}))
 	defer srv.Close()
 
-	// TWO candidate channels both serving the override, so "no failover" is
-	// observable: a second attempt would call the mock upstream.
-	ch1 := tmChannel(t, gdb, model.ChannelOpenAI, srv.URL, []string{tmRequestedModel, tmTargetModel}, nil, false)
-	ch2 := tmChannel(t, gdb, model.ChannelOpenAI, srv.URL, []string{tmRequestedModel, tmTargetModel}, nil, false)
-	// Only the REQUESTED model is priced, on both channels.
-	tmPrice(t, gdb, ch1.ID, tmRequestedModel, 3_000_000, 15_000_000)
-	tmPrice(t, gdb, ch2.ID, tmRequestedModel, 3_000_000, 15_000_000)
+	ch := tmChannel(t, gdb, model.ChannelOpenAI, srv.URL, []string{tmRequestedModel, tmTargetModel}, nil, false)
+	// Only the REQUESTED model is priced, and expensively so — if the lookup used
+	// that name the cost below could not be 0.
+	tmPrice(t, gdb, ch.ID, tmRequestedModel, 3_000_000, 15_000_000)
 	tmRule(t, gdb, "haiku-tier", tmTargetModel)
 	u, tok := tmIdentity(t, gdb)
 
@@ -480,22 +475,21 @@ func TestTargetModel_MissingPriceOnOverrideRejects400(t *testing.T) {
 	}, u, tok)
 	w := tmServeNonStream(r, rc)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (missing price for the overridden model); body=%s", w.Code, w.Body.String())
-	}
-	if n := atomic.LoadInt32(&upstreamCalls); n != 0 {
-		t.Errorf("upstream calls = %d, want 0 (a missing price must not fail over or reach upstream)", n)
-	}
-	if msg := tmErrMessage(t, w.Body.String()); !strings.Contains(msg, tmTargetModel) {
-		t.Errorf("error message = %q, want it to name the overridden model %q", msg, tmTargetModel)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an unpriced model is served free); body=%s", w.Code, w.Body.String())
 	}
 
 	log := tmOneLog(t, gdb)
-	if log.HTTPStatus != http.StatusBadRequest || log.Status != model.LogError {
-		t.Errorf("log status = (%q,%d), want (error,400)", log.Status, log.HTTPStatus)
+	if log.HTTPStatus != http.StatusOK || log.Status != model.LogSuccess {
+		t.Errorf("log status = (%q,%d), want (success,200)", log.Status, log.HTTPStatus)
 	}
 	if log.UpstreamModel != tmTargetModel {
 		t.Errorf("request_logs.upstream_model = %q, want the overridden model %q", log.UpstreamModel, tmTargetModel)
+	}
+	// The load-bearing assertion: cost 0 proves the price was looked up under the
+	// OVERRIDDEN (unpriced) model, not the requested (priced) one.
+	if log.CostMicroUSD != nil && *log.CostMicroUSD != 0 {
+		t.Errorf("cost = %d, want 0 — a non-zero cost means the requested model's price was used", *log.CostMicroUSD)
 	}
 }
 

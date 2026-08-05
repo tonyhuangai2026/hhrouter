@@ -9,11 +9,9 @@ import (
 	"github.com/agent-router/server/internal/model"
 )
 
-// ErrPriceNotConfigured is returned by PricingService.Lookup when the requested
-// (channel, model) has no usable price: either no row exists, or its input or
-// output price is not positive. The relay maps this to a clear client-facing
-// error ("model has no price configured") and does NOT fail over — a missing
-// price is an operator-configuration problem, not an upstream fault.
+// ErrPriceNotConfigured reports that a price row does not exist. Delete returns
+// it for an unknown id. Lookup does NOT: an unpriced model is served for free
+// (see Lookup).
 var ErrPriceNotConfigured = errors.New("model price not configured")
 
 // microUSDPerMillionDivisor is the denominator that turns
@@ -34,21 +32,35 @@ func NewPricingService(db *gorm.DB) *PricingService {
 	return &PricingService{db: db}
 }
 
-// Lookup returns the price row for (channelID, model). It returns
-// ErrPriceNotConfigured when no row exists or when the row's input/output price
-// is not strictly positive (cache tiers may legitimately be 0). The relay treats
-// any non-nil error here as "reject the request".
+// Lookup returns the price row for (channelID, model), or (nil, nil) when the
+// model has no usable price — no row at all, or a row whose input/output price is
+// not strictly positive.
+//
+// An unpriced model is treated as FREE rather than as an error: refusing to serve
+// a model purely because nobody has filled in its price turns a bookkeeping gap
+// into an outage, and operators kept hitting it after adding a model to a channel.
+// Cost(nil, …) is 0, so such a request is served, logged with cost 0, and debits
+// nothing.
+//
+// The tradeoff is deliberate and worth knowing: because quotas are enforced in
+// USD, a model left unpriced is effectively unmetered — it consumes no key or user
+// balance and contributes nothing to billing. Configure prices for anything whose
+// spend must be capped.
+//
+// Only a genuine database failure returns a non-nil error.
 func (s *PricingService) Lookup(channelID uint, modelName string) (*model.ModelPrice, error) {
 	var p model.ModelPrice
 	err := s.db.Where("channel_id = ? AND model = ?", channelID, modelName).First(&p).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrPriceNotConfigured
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	if p.InputMicroUSDPerM <= 0 || p.OutputMicroUSDPerM <= 0 {
-		return nil, ErrPriceNotConfigured
+		// A row with a non-positive price is as unusable as no row, and treating
+		// the two differently would only make misconfiguration harder to diagnose.
+		return nil, nil
 	}
 	return &p, nil
 }

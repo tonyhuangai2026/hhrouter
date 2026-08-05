@@ -758,14 +758,15 @@ func buildTestChatPriceRouter(gdb *gorm.DB, adminUID uint) *gin.Engine {
 	return r
 }
 
-// TestTestChat_NoPriceRejected: with the gate active, an unpriced model is
-// rejected 400 and NO upstream call is made (the mock must not be hit).
-func TestTestChat_NoPriceRejected(t *testing.T) {
+// TestTestChat_UnpricedIsAllowedFree: an unpriced model is served (matching /v1,
+// where an unpriced model is free rather than rejected), the upstream IS called,
+// and the is_test log records a zero cost rather than an error.
+func TestTestChat_UnpricedIsAllowedFree(t *testing.T) {
 	gdb := newTestChatPriceDB(t)
 	hit := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		hit = true
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"x"}}]}`))
+		_, _ = w.Write([]byte(`{"model":"gpt-4o","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500}}`))
 	}))
 	defer srv.Close()
 
@@ -773,16 +774,20 @@ func TestTestChat_NoPriceRejected(t *testing.T) {
 	r := buildTestChatPriceRouter(gdb, 5)
 
 	w := doTestChat(t, r, id, adminToken(t), `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("no-price code = %d, want 400 body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("no-price code = %d, want 200 (unpriced is free) body=%s", w.Code, w.Body.String())
 	}
-	if hit {
-		t.Error("upstream was called despite missing price (gate must short-circuit)")
+	if !hit {
+		t.Error("upstream was NOT called; an unpriced model should still be testable")
 	}
 	var rows []model.RequestLog
 	gdb.Find(&rows)
-	if len(rows) != 1 || rows[0].Status != model.LogError || rows[0].CostMicroUSD != nil {
-		t.Fatalf("expected 1 error log with NULL cost, got %+v", rows)
+	if len(rows) != 1 || rows[0].Status != model.LogSuccess {
+		t.Fatalf("expected 1 success log, got %+v", rows)
+	}
+	// Cost is 0 (or NULL) for an unpriced model — never a charge.
+	if rows[0].CostMicroUSD != nil && *rows[0].CostMicroUSD != 0 {
+		t.Errorf("cost = %d, want 0 for an unpriced model", *rows[0].CostMicroUSD)
 	}
 }
 

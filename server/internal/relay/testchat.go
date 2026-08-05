@@ -155,19 +155,13 @@ func (tc *TestChatController) TestChat(c *gin.Context) {
 	defer tc.writeTestLog(c, st)
 
 	// Price gate (Tech Design §4.4): the same "model must have a price" rule as
-	// production /v1. A missing price → 400, no upstream call. test-chat still
-	// never consumes quota, but the resolved price is kept so writeTestLog can
-	// record the computed cost on the is_test log. Skipped when no PricingService
-	// is wired (bare-handler tests).
+	// production /v1. An unpriced model is allowed and costs 0, matching /v1 (see
+	// PricingService.Lookup). test-chat still never consumes quota; the resolved
+	// price is kept so writeTestLog can record the computed cost on the is_test
+	// log. Skipped when no PricingService is wired (bare-handler tests).
 	if tc.pricing != nil {
 		price, perr := tc.pricing.Lookup(ch.ID, resolvedModel)
 		if perr != nil {
-			if errors.Is(perr, service.ErrPriceNotConfigured) {
-				msg := "model \"" + resolvedModel + "\" has no price configured on channel \"" + ch.Name + "\"; configure a price before testing"
-				st.fail(http.StatusBadRequest, msg)
-				writeTestChatError(c, http.StatusBadRequest, "invalid_request_error", msg)
-				return
-			}
 			msg := "could not look up model price: " + perr.Error()
 			st.fail(http.StatusInternalServerError, msg)
 			writeTestChatError(c, http.StatusInternalServerError, "internal_error", msg)
