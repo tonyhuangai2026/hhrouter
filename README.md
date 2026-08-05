@@ -131,6 +131,125 @@ Two things worth knowing before running behind a load balancer:
 
 ---
 
+## How routing works
+
+Four steps turn one inbound request into one upstream call.
+
+```
+  request ─┬─ group   (whose API key)
+           ├─ model   (what the client asked for)
+           └─ tokens  (estimated prompt size)
+                │
+ ═══════════════▼═══ (1) MATCH ══════════════════════════════════════════════
+                │   Rules sorted by priority ASCENDING. The FIRST rule whose
+                │   every condition holds wins — and that is final: there is
+                │   no backtracking to a later rule.
+                │
+     ┌───────────────────────────────┐
+     │ rule 0   match + expr         │
+     │ rule 1   match + expr         │
+     │ rule 2   (catch-all, no expr) │
+     └───────────────────────────────┘
+                │
+                │   match{} : groups / models (supports *) / min_tokens / max_tokens
+                │   expr    : boolean over  w, t, tokens, group, model
+                │
+                │   The probe supplying w and t is called ONLY when some enabled
+                │   rule's expr references w or t — once per request. If it fails,
+                │   w and t are simply 0.
+                │
+                │  ▼ matched rule  (none → fallback, see below)
+                │
+ ═══════════════▼═══ (2) CANDIDATES ═════════════════════════════════════════
+                │
+                │   effective model = rule.target_model if set, else the
+                │                     model the client requested
+                │
+     ┌─────────────────────────────────────────┬──────────────────────────────────────┐
+     │ rule NAMED its targets?                 │ no targets named, or no rule matched │
+     │ (target_channel_ids, else target_group) │                                      │
+     │                                         │                                      │
+     │ YES → those channels ARE the answer.    │ → any enabled channel that SERVES    │
+     │      The model name does NOT filter     │   the effective model (its models    │
+     │      them. Channel routing beats        │   list, or a model_mapping key)      │
+     │      model routing.                     │                                      │
+     └─────────────────────────────────────────┴──────────────────────────────────────┘
+                │
+                │   No candidate? The request FAILS, naming the rule. It does
+                │   not fall through to a lower-priority rule — that would turn
+                │   quality tiering into a silent downgrade.
+                │
+ ═══════════════▼═══ (3) LOAD BALANCE ═══════════════════════════════════════
+                │
+                │   Bucket candidates by channel.priority DESCENDING (opposite
+                │   direction to rule priority), take the top bucket, and pick
+                │   one inside it by weighted random (weight <= 0 counts as 1).
+                │
+                │  ▼ primary pick, then the rest in order as failover candidates
+                │
+ ═══════════════▼═══ (4) CALL + FAILOVER ════════════════════════════════════
+
+     for each candidate, up to RouterMaxRetries (default 3):
+
+        network error ................. retry the next candidate
+        upstream 5xx (retryable) ...... retry the next candidate
+        upstream 4xx (not retryable) .. surface to the client, stop
+        no price / no candidate ....... configuration error, stop
+```
+
+### Which model actually gets called
+
+Three layers, each answering a different question. The order matters:
+
+```
+  rule      "which model should serve this?"    target_model, else the requested name
+    │
+    ▼
+  channel   "what is that model called HERE?"   model_mapping
+    │
+    ▼
+  adapter   "any provider prefix needed?"       Bedrock cross-region us./eu./apac.
+    │
+    ▼
+  the id actually sent upstream
+```
+
+The middle layer is not optional: the same Opus is `claude-opus-4-8` on an
+Anthropic-compatible gateway and `anthropic.claude-opus-4-8` on Bedrock. Because the
+channel translates, one rule can target both.
+
+That resolved id is then what the rest of the request uses — price lookup, the
+prompt-cache minimum-length threshold (4096 tokens for Haiku, 1024 otherwise), the
+Bedrock inference-profile prefix, and `request_logs.upstream_model`. The log's `model`
+column keeps the client's original name, so the two stay distinguishable.
+
+### Worked example: cheap by default, expensive when it matters
+
+One channel serving three tiers. Rules ascending, strictest first:
+
+| priority | `expr` | `target_model` | serves |
+|---:|---|---|---|
+| 0 | `w == 1 && t > 500` | opus | writes / tool-calls with long output |
+| 1 | `w == 1 or t > 150` | sonnet | anything write-ish or mid-length |
+| 2 | *(empty — catch-all)* | haiku | everything else |
+
+Write rule 1's condition as `w == 1 || t > 150`; it is spelled out here only because a
+table cell would otherwise need the pipes escaped.
+
+A request for `claude-opus-4-8` that falls through to rule 2 is served by **haiku**: the
+rule names the channel, so the requested name does not disqualify it, and `target_model`
+settles what actually runs. Billing follows haiku's price, and the log records
+`model=claude-opus-4-8` with `upstream_model=<haiku's id>`.
+
+> **Two priority fields, opposite directions.** Rule priority is ascending — the lower
+> number matches first. Channel priority is descending — the higher number is preferred.
+
+To tier on prompt size alone, with no probe and no SageMaker cost, use
+`match.min_tokens` / `max_tokens` or an `expr` over `tokens`, and keep `w`/`t` out of
+every rule.
+
+---
+
 ## End-to-end walkthrough
 
 This is the full happy path, from a fresh deploy to calling the relay with an OpenAI and
